@@ -23,7 +23,7 @@ fn main() {
     let input: Input = Input {
         ray: Ray::new(
             Point3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 0.0),
-            Vec3::Z,
+            Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 1.0).normalized(),
         ),
         lambda: 450.0,
     };
@@ -45,4 +45,30 @@ fn main() {
     println!("testing evaluate aspherical derivative with given input");
     let result = evaluate_aspherical_derivative(input.ray.origin, 0.9, 1, f32x4_ZERO);
     println!("{}", result);
+    println!("testing trace aspherical with given input");
+    let result = trace_aspherical(input.ray, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
+    match result {
+        Ok((ray, normal)) => {
+            println!("{:?}, {:?}", ray, normal);
+        }
+        Err(error) => {
+            println!("error occurred with code {}", error);
+        }
+    };
+    println!("testing trace cylindrical with given input");
+    let trace_result = trace_cylindrical(input.ray, 0.9, 1.0, 0.9);
+    match trace_result {
+        Ok((ray, normal)) => {
+            println!("{:?}, {:?}", ray, normal);
+        }
+        Err(error) => {
+            println!("error occurred with code {}", error);
+        }
+    };
+    println!("testing fresnel with given input");
+    let result = fresnel(1.0, 1.45, 0.3, 0.6);
+    println!("{}", result);
+    println!("testing refract with given input");
+    let result = refract(1.0, 1.45, trace_result.unwrap().1, input.ray.direction);
+    println!("{:?}", result);
 }

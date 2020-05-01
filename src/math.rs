@@ -276,9 +276,11 @@ impl Ray {
         self.tmax = tmax;
         self
     }
-    // pub fn at_time(mut self, time: f32) -> Self {
-    //     // self.origin =
-    // }
+    pub fn at_time(mut self, time: f32) -> Self {
+        self.origin = self.point_at_parameter(time);
+        self.time = time;
+        self
+    }
     pub fn point_at_parameter(self, time: f32) -> Point3 {
         self.origin + self.direction * time
     }
@@ -345,12 +347,12 @@ pub fn trace_spherical(
         if t < -1.0e-4 {
             Err(16)
         } else {
-            let new_ray = Ray::new_with_time(ray.point_at_parameter(t), ray.direction, t);
+            let ray = ray.at_time(t);
             let (rx, ry) = (ray.origin.x(), ray.origin.y());
             error |= (rx * rx + ry * ry > housing_radius * housing_radius) as i16;
             let normal = Vec3::new(rx, ry, ray.origin.z() - center) / r;
             if error == 0 {
-                Ok((new_ray, normal.normalized()))
+                Ok((ray, normal.normalized()))
             } else {
                 Err(error)
             }
@@ -398,109 +400,102 @@ pub fn trace_aspherical(
 ) -> Result<(Ray, Vec3), i32> {
     let mut t = 0.0;
     let result = trace_spherical(ray, r, center, housing_radius)?;
-    ray = result.ray;
-    let normal = result.normal;
+    ray = result.0;
+    let normal = result.1;
     let mut rad = r;
     if (center + r - ray.origin.z()).abs() > (center - r - ray.origin.z()).abs() {
         rad = -r;
         correction = -correction;
     }
 
-    let mut position_error = 1.0e7;
+    let mut position_error;
+    // repeatedly trace the ray forwads and backwards until the position error is less than some constant.
+    for _ in 0..100 {
+        position_error =
+            rad + center - ray.origin.z() - evaluate_aspherical(ray.origin, rad, k, correction);
+        let terr = position_error / ray.direction.z();
+        t += terr;
+        ray = ray.at_time(terr);
+        if position_error.abs() < 1.0e-4 {
+            break;
+        }
+    }
+    let dz = evaluate_aspherical_derivative(ray.origin, rad, k, correction)
+        * if normal.z() < 0.0 { -1.0 } else { 1.0 };
+    let sqr = ray.origin.0 * ray.origin.0;
+    let new_r = (sqr.extract(0) + sqr.extract(1)).sqrt();
+    let normal = Vec3::new(
+        ray.origin.x() / new_r * dz,
+        ray.origin.y() / new_r * dz,
+        normal.z() / normal.z().abs(),
+    )
+    .normalized();
+
+    Ok((ray.at_time(t), normal))
 }
 
-// static inline int aspherical(float *pos, float *dir, float *dist, const float R, const float center, const int k, const float *correction, const float housing_rad, float *normal)
-// {
-//   //first intersect sphere, then do correction iteratively
-//   float t = 0;
-//   int error = spherical(pos, dir, &t, R, center, housing_rad, normal);
+pub fn trace_cylindrical(
+    mut ray: Ray,
+    r: f32,
+    center: f32,
+    housing_radius: f32,
+) -> Result<(Ray, Vec3), i32> {
+    let scv = Vec3::new(ray.origin.x(), 0.0, ray.origin.z() - center);
+    let a = ray.direction * ray.direction;
+    let b = 2.0 * ray.direction * scv;
+    let c = scv * scv - r * r;
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return Err(4);
+    }
+    let mut t = 0.0;
+    if r > 0.0 {
+        t = (-b - discriminant.sqrt()) / (2.0 * a);
+    } else {
+        t = (-b + discriminant.sqrt()) / (2.0 * a);
+    }
+    ray = ray.at_time(t);
+    let sqr = ray.origin.0 * ray.origin.0;
+    if sqr.extract(0) + sqr.extract(1) > housing_radius * housing_radius {
+        return Err(8);
+    }
+    let normal = Vec3::new(ray.origin.x(), 0.0, ray.origin.z() - center) / r;
+    Ok((ray, normal))
+}
 
-//   float rad = R;
-//   float corr[4] = {correction[0], correction[1], correction[2], correction[3]};
-//   if(fabs(center+R-pos[2]) > fabs(center-R-pos[2]))
-//   {
-//     rad = -R;
-//     for(int i = 0; i < 4; i++) corr[i] = -corr[i];
-//   }
+pub fn fresnel(n1: f32, n2: f32, cosr: f32, cost: f32) -> f32 {
+    if cost <= 0.0 {
+        1.0
+    } else {
+        let n2cost = n2 * cost;
+        let n1cosr = n1 * cosr;
+        let n1cost = n1 * cost;
+        let n2cosr = n2 * cosr;
+        let rs = (n1cosr - n2cost) / (n1cosr + n2cost);
+        let rp = (n1cost - n2cosr) / (n1cost + n2cosr);
+        ((rs * rs + rp * rp) / 2.0).min(1.0)
+    }
+}
 
-//   float position_error = 1e7;
-
-//   for(int i = 0; i < 100; i++)
-//   {
-//     position_error = rad+center-pos[2]-evaluate_aspherical(pos, rad, k, correction);
-//     float tErr = position_error/dir[2];
-//     t += tErr;
-//     propagate(pos, dir, tErr);
-//     if(fabs(position_error) < 1e-4) break;
-//   }
-
-//   float dz = evaluate_aspherical_derivative(pos, rad, k, correction);
-//   const float r = sqrt(pos[0]*pos[0]+pos[1]*pos[1]);
-
-//   if(normal[2] < 0) dz = -dz;
-//   normal[0] = pos[0]/r*dz;
-//   normal[1] = pos[1]/r*dz;
-//   normal[2] /= fabs(normal[2]);
-
-//   raytrace_normalise(normal);
-
-//   *dist = t;
-//   return error;
-// }
-
-// static inline int cylindrical(float *pos, float *dir, float *dist, float R, float center, float housing_rad, float *normal)
-// {
-//   const float scv[3] = {pos[0], 0, pos[2] - center};
-//   const float a = raytrace_dot(dir, dir);
-//   const float b = 2 * raytrace_dot(dir, scv);
-//   const float c = raytrace_dot(scv, scv) - R*R;
-//   const float discr = b*b-4*a*c;
-//   if(discr < 0.0f) return 4;
-//   int error = 0;
-//   float t = 0.0f;
-//   if(R > 0.0f)
-//     t = (-b-sqrtf(discr))/(2*a);
-//   else if(R < 0.0f)
-//     t = (-b+sqrtf(discr))/(2*a);
-
-//   propagate(pos, dir, t);
-//   error |= (int)(pos[0]*pos[0] + pos[1]*pos[1] > housing_rad*housing_rad)<<4;
-
-//   normal[0] = pos[0]/R;
-//   normal[1] = 0.0f;
-//   normal[2] = (pos[2] - center)/R;
-
-//   *dist = t;
-//   return error;
-// }
-
-// static inline float fresnel(const float n1, const float n2, const float cosr, const float cost)
-// {
-//   if(cost <= 0.0f) return 1.0f; // total inner reflection
-//   // fresnel for unpolarized light:
-//   const float Rs = (n1*cosr - n2*cost)/(n1*cosr + n2*cost);
-//   const float Rp = (n1*cost - n2*cosr)/(n1*cost + n2*cosr);
-//   return fminf(1.0f, (Rs*Rs + Rp*Rp)*.5f);
-// }
-
-// static inline float refract(const float n1, const float n2, const float *n, float *dir)
-// {
-//   if(n1 == n2)
-//     return 1;
-//   const float eta = n1/n2;
-
-//   const float norm = sqrtf(raytrace_dot(dir,dir));
-//   const float cos1 = - raytrace_dot(n, dir)/norm;
-//   const float cos2_2 = 1.0f-eta*eta*(1.0f-cos1*cos1);
-//   // total (inner) reflection?
-//   if(cos2_2 < 0.0f)
-//     return 0;
-//   const float cos2 = sqrtf(cos2_2);
-
-//   for(int i=0;i<3;i++) dir[i] = dir[i]*eta/norm + (eta*cos1-cos2)*n[i];
-
-//   return 1.0f-fresnel(n1, n2, cos1, cos2);
-// }
+pub fn refract(n1: f32, n2: f32, normal: Vec3, dir: Vec3) -> (Vec3, f32) {
+    if n1 == n2 {
+        (dir, 1.0)
+    } else {
+        let eta = n1 / n2;
+        let norm = dir.norm();
+        let cos1 = -(normal * dir) / norm;
+        let cos2_2 = 1.0 - eta * eta * (1.0 - cos1 * cos1);
+        if cos2_2 < 0.0 {
+            (dir, 0.0)
+        } else {
+            let cos2 = cos2_2.sqrt();
+            (
+                dir * eta / norm + (eta * cos1 - cos2) * normal,
+                1.0 - fresnel(n1, n2, cos1, cos2),
+            )
+        }
+    }
+}
 
 // static inline void planeToCs(const float *inpos, const float *indir, float *outpos, float *outdir, const float planepos)
 // {
