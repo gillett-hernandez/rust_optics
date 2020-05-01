@@ -25,7 +25,7 @@ pub struct LensElement {
 }
 
 impl LensElement {
-    pub fn get_thickness(self, mut zoom: f32) -> f32 {
+    pub fn thickness_at(self, mut zoom: f32) -> f32 {
         if zoom < 0.5 {
             zoom *= 2.0;
             self.thickness_short * (1.0 - zoom) + self.thickness_mid * zoom
@@ -35,7 +35,7 @@ impl LensElement {
             self.thickness_mid * (1.0 - zoom) + self.thickness_long * zoom
         }
     }
-    pub fn get_aperture_radius(slice: &[Self]) -> f32 {
+    pub fn aperture_radius(slice: &[Self]) -> f32 {
         for elem in slice {
             match elem.lens_type {
                 LensType::Aperture => {
@@ -48,7 +48,7 @@ impl LensElement {
         }
         0.0
     }
-    pub fn get_aperture_pos(slice: &[Self], zoom: f32) -> f32 {
+    pub fn aperture_pos(slice: &[Self], zoom: f32) -> f32 {
         let mut pos = 0.0;
         for elem in slice {
             match elem.lens_type {
@@ -56,138 +56,127 @@ impl LensElement {
                     break;
                 }
                 _ => {
-                    pos += elem.get_thickness(zoom);
+                    pos += elem.thickness_at(zoom);
                 }
             }
         }
         pos
     }
+    pub fn parse_from(string: &str, default_ior: f32, default_vno: f32) -> Result<Self, &str> {
+        // format is:
+        // lens := radius thickness_short(/thickness_mid(/thickness_long)?)? (anamorphic)? (mtl_name|'air'|'iris') ior vno housing_radius ('#!aspheric='aspheric_correction)?
+        // radius := float
+        // thickness_short := float
+        // thickness_mid := float
+        // thickness_long := float
+        // anamorphic := 'cx_'
+        // mtl_name := word
+        // ior := float
+        // vno := float
+        // housing_radius := float
+        // aspheric_correction := (float','){3}float
+
+        if string.starts_with("#") {
+            return Err("line started with comment");
+        }
+        println!("{}", string);
+        let mut tokens = string.split_ascii_whitespace();
+        let radius = tokens
+            .next()
+            .ok_or("ran out of tokens at radius")?
+            .parse::<f32>()
+            .map_err(|e| "err parsing float at radius")?;
+        let thickness_token: &str = tokens
+            .next()
+            .ok_or("ran out of tokens at thickness token")?;
+        let mut thickness_iterator = thickness_token.split("/");
+        let thickness_short = thickness_iterator
+            .next()
+            .unwrap()
+            .parse::<f32>()
+            .map_err(|e| "err parsing float at thickness short")?;
+        let thickness_mid = match thickness_iterator.next() {
+            Some(token) => token
+                .parse::<f32>()
+                .map_err(|e| "err parsing float at thickness mid")?,
+            None => thickness_short,
+        };
+        let thickness_long = match thickness_iterator.next() {
+            Some(token) => token
+                .parse::<f32>()
+                .map_err(|e| "err parsing float at thickness long")?,
+            None => thickness_short,
+        };
+        let maybe_anamorphic_or_lens = tokens.next().ok_or("ran out of tokens at anamorphic")?;
+        let anamorphic = maybe_anamorphic_or_lens == "cx_";
+        let next_token = if !anamorphic {
+            maybe_anamorphic_or_lens
+        } else {
+            tokens.next().ok_or("ran out of tokens at lens type")?
+        };
+        let lens_type = match next_token {
+            "air" => LensType::Air,
+            "iris" => LensType::Aperture,
+            _ => LensType::Solid,
+        };
+        let (ior, vno, housing_radius);
+        let (a, b) = (tokens.next(), tokens.next());
+        match (a, b) {
+            (Some(token1), Some(token2)) => {
+                ior = token1
+                    .parse::<f32>()
+                    .map_err(|e| "err parsing float at ior")?;
+                vno = token2
+                    .parse::<f32>()
+                    .map_err(|e| "err parsing float at vno")?;
+                println!("ior {} vno {}", ior, vno);
+                housing_radius = tokens
+                    .next()
+                    .ok_or("ran out of tokens at housing radius branch 1")?
+                    .parse::<f32>()
+                    .map_err(|e| "err parsing float at housing radius branch 1")?;
+                let _aspheric = tokens.next();
+            }
+            (Some(token1), None) => {
+                // this must be the situation where there is a housing radius but no aspheric correction.
+                ior = default_ior;
+                vno = default_vno;
+                housing_radius = token1
+                    .parse::<f32>()
+                    .map_err(|e| "error parsing float at housing radius branch 2")?;
+            }
+            (None, None) => {
+                return Err("ran_out_of_tokens");
+            }
+            (None, Some(token1)) => {
+                return Err("what the fuck");
+            }
+        }
+
+        Ok(LensElement {
+            radius,
+            thickness_short,
+            thickness_mid,
+            thickness_long,
+            anamorphic,
+            lens_type,
+            ior,
+            vno,
+            housing_radius,
+            aspheric: 0,
+            correction: f32x4_ZERO,
+        })
+    }
 }
 
-// int lens_configuration(lens_element_t *l, const char *filename, int max)
-// {
-//   FILE *f = fopen(filename, "rb");
-//   if(!f) return 0;
-//   int cnt = 0;
-
-//   float last_ior = 1.0f;
-//   float last_vno = 0.0f;
-//   float scale = 1.0f;
-//   while(1)
-//   {
-//     lens_element_t lens;
-//     memset(&lens, 0, sizeof(lens_element_t));
-//     char line[2048];
-//     if(fscanf(f, "%[^\n]", line) == EOF) break;
-//     if(fgetc(f) == EOF) break; // new line
-
-//     char *in = line;
-
-//     if(!strncmp(line, "#!scale", 7))
-//     {
-//       scale = atof(line + 8);
-//       continue;
-//     }
-//     // munch comment
-//     if(!strncmp(line, "//", 2) || !strncmp(line, "#", 1)) continue;
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     lens.radius = scale * strtof(in, &in);
-//     if(lens.radius == 0.0f) break;
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     lens.thickness_short = scale * strtof(in, &in);
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     if(in[0] == '/')
-//       lens.thickness_mid = scale * strtof(in+1, &in);
-//     else
-//       lens.thickness_mid = lens.thickness_short;
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     if(in[0] == '/')
-//       lens.thickness_long = scale * strtof(in+1, &in);
-//     else
-//       lens.thickness_long = lens.thickness_short;
-//     if(lens.thickness_short == 0.0f) break;
-//     if(lens.thickness_mid   == 0.0f) break;
-//     if(lens.thickness_long  == 0.0f) break;
-
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     if(!strncmp(in, "cx_", 3))
-//     {
-//       lens.anamorphic = 1;
-//       in += 3;
-//     }
-//     int i=0;
-//     while(in[0] != '\t' && in[0] != ' ' && in[0] != '\0') lens.material[i++] = in++[0];
-//     lens.material[i] = '\0';
-//     if(!strcasecmp(lens.material, "air"))
-//     {
-//       lens.ior = 1.0f;
-//       lens.vno = 0.0f;
-//     }
-//     else if(!strcasecmp(lens.material, "iris"))
-//     {
-//       lens.ior = last_ior;
-//       lens.vno = last_vno;
-//     }
-//     else
-//     {
-//       while(in[0] == '\t' || in[0] == ' ') in++;
-//       lens.ior = strtof(in, &in);
-//       while(in[0] == '\t' || in[0] == ' ') in++;
-//       lens.vno = strtof(in, &in);
-//     }
-//     last_ior = lens.ior;
-//     last_vno = lens.vno;
-//     if(lens.ior == 0.0f) break;
-
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     lens.housing_radius = scale * strtof(in, &in);
-//     if(lens.housing_radius == 0.0f) break;
-
-//     lens.aspheric = 0;
-//     for(int i = 0; i < 4; i++)
-//       lens.aspheric_correction_coefficients[i] = 0;
-
-//     while(in[0] == '\t' || in[0] == ' ') in++;
-//     if(!strncmp(in, "#!aspheric=", 11))
-//     {
-//       in += 11;
-//       lens.aspheric = strtol(in, &in, 10);
-//       // munch comma
-//       in++;
-//       for(int i = 0; i < 4; i++, in++)
-//         lens.aspheric_correction_coefficients[i] = strtof(in, &in);
-//     }
-
-//     l[cnt++] = lens;
-
-//     if(cnt >= max) break;
-//   }
-//   fclose(f);
-//   return cnt;
-// }
-
-// static inline void lens_canonicalize_name(const char *filename, char *out)
-// {
-//   const char *start = filename;
-//   const char *end = filename;
-//   const char *c = filename;
-//   for(;*c!=0;c++) if(*c == '/') start = c+1;
-//   end = c;
-//   int i=0;
-//   for(;start != end;start++)
-//   {
-//     if(*start == '.') break;
-//     else if(*start >= 65  && *start <= 90) // caps
-//     {
-//       if(i) out[i++] = ' ';
-//       out[i++] = *start + 32;
-//     }
-//     else if(*start >= 48 && *start <= 59) // numbers
-//       out[i++] = *start;
-//     else if(*start < 97) // special
-//       out[i++] = ' ';
-//     else
-//       out[i++] = *start;
-//   }
-//   out[i++] = 0;
-// }
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_parse() {
+        let test_string = "65.22 9.60  N-SSK8 1.5 50 24.0";
+        // LensElement::parse_from(test_string);
+        let lens = LensElement::parse_from(test_string);
+        println!("{:?}", lens);
+    }
+}

@@ -248,6 +248,7 @@ pub fn cs_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray 
     )
 }
 
+// traces rays from the sensor to the outer pupil
 pub fn evaluate(
     lenses: &Vec<LensElement>,
     zoom: f32,
@@ -267,7 +268,7 @@ pub fn evaluate(
     let mut distsum = 0.0;
     for (k, lens) in lenses.iter().rev().enumerate() {
         let r = -lens.radius;
-        let dist = lens.get_thickness(zoom);
+        let dist = lens.thickness_at(zoom);
         distsum += dist;
         let mut normal;
         let res: (Ray, Vec3);
@@ -408,7 +409,7 @@ mod test {
 //   {
 //     const float R = lenses[k].radius;
 //     float t = 0.0f;
-//     const float dist = lens_get_thickness(lenses+k, zoom);
+//     const float dist = lens_thickness_at(lenses+k, zoom);
 
 //     //normal at intersection
 //     float n[3] = {0.0};
@@ -456,7 +457,7 @@ mod test {
 //     // propagate the ray reverse to the plane of intersection optical axis/lens element:
 //     const float R = -lenses[k].radius; // negative, evaluate() is the adjoint case
 //     float t = 0.0f;
-//     const float dist = lens_get_thickness(lenses+k, zoom);
+//     const float dist = lens_thickness_at(lenses+k, zoom);
 //     distsum += dist;
 
 //     // stop after moving to aperture.
@@ -508,7 +509,7 @@ mod test {
 //   {
 //     const float R = lenses[k].radius;
 //     float t = 0.0f;
-//     const float dist = lens_get_thickness(lenses+k, zoom);
+//     const float dist = lens_thickness_at(lenses+k, zoom);
 
 //     //normal at intersection
 //     float n[3];
@@ -560,7 +561,7 @@ mod test {
 //   {
 //     const float R = lenses[k].radius;
 //     float t = 0.0f;
-//     const float dist = lens_get_thickness(lenses+k, zoom);
+//     const float dist = lens_thickness_at(lenses+k, zoom);
 
 //     //normal at intersection
 //     float n[3];
