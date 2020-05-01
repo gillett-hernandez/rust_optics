@@ -8,6 +8,8 @@ pub use packed_simd::f32x4;
 use std::f32::INFINITY;
 use std::ops::{Add, Div, Mul, MulAssign, Neg, Sub};
 
+pub const f32x4_ZERO: f32x4 = f32x4::new(0.0, 0.0, 0.0, 0.0);
+
 #[derive(Copy, Clone, Debug)]
 pub struct Vec3(pub f32x4);
 
@@ -286,40 +288,6 @@ impl Ray {
     }
 }
 
-pub struct Input {
-    pub ray: Ray,
-    pub lambda: f32,
-}
-
-impl Input {
-    pub fn slice(&self) -> [f32; 5] {
-        [
-            self.ray.origin.x(),
-            self.ray.origin.y(),
-            self.ray.direction.x(),
-            self.ray.direction.y(),
-            self.lambda,
-        ]
-    }
-}
-
-pub struct Output {
-    pub ray: Ray,
-    pub tau: f32,
-}
-
-impl Output {
-    pub fn slice(&self) -> [f32; 5] {
-        [
-            self.ray.origin.x(),
-            self.ray.origin.y(),
-            self.ray.direction.x(),
-            self.ray.direction.y(),
-            self.tau,
-        ]
-    }
-}
-
 // also known as an orthonormal basis.
 pub struct TangentFrame {
     pub tangent: Vec3,
@@ -387,5 +355,38 @@ impl TangentFrame {
             self.bitangent * (*v),
             self.normal * (*v),
         )
+    }
+}
+pub struct Input {
+    pub ray: Ray,
+    pub lambda: f32,
+}
+
+impl Input {
+    pub fn slice(&self) -> [f32; 5] {
+        [
+            self.ray.origin.x(),
+            self.ray.origin.y(),
+            self.ray.direction.x(),
+            self.ray.direction.y(),
+            self.lambda,
+        ]
+    }
+}
+
+pub struct Output {
+    pub ray: Ray,
+    pub tau: f32,
+}
+
+impl Output {
+    pub fn slice(&self) -> [f32; 5] {
+        [
+            self.ray.origin.x(),
+            self.ray.origin.y(),
+            self.ray.direction.x(),
+            self.ray.direction.y(),
+            self.tau,
+        ]
     }
 }

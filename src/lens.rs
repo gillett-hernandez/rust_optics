@@ -4,7 +4,8 @@ use crate::math::*;
 
 #[derive(Copy, Clone, Debug)]
 pub enum LensType {
-    Lens,
+    Solid,
+    Air,
     Aperture,
 }
 
@@ -14,13 +15,13 @@ pub struct LensElement {
     pub thickness_short: f32,
     pub thickness_mid: f32,
     pub thickness_long: f32,
-    pub housing_radius: f32,
-    pub ior: f32, // index of refraction
-    pub vno: f32, // abbe number
-    pub correction: f32x4,
-    pub aspheric: i32,
     pub anamorphic: bool,
     pub lens_type: LensType,
+    pub ior: f32, // index of refraction
+    pub vno: f32, // abbe number
+    pub housing_radius: f32,
+    pub aspheric: i32,
+    pub correction: f32x4,
 }
 
 impl LensElement {

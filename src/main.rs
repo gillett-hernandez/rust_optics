@@ -3,6 +3,7 @@ mod math;
 mod spectrum;
 mod trace;
 
+use lens::*;
 use math::*;
 use packed_simd::f32x4;
 use rand::prelude::*;
@@ -11,81 +12,102 @@ use trace::*;
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
 
-const f32x4_ZERO: f32x4 = f32x4::new(0.0, 0.0, 0.0, 0.0);
-
 fn main() {
     println!("testing usage of new Vector3 as defined in nalgebra");
     let v1: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
     let v2: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
     println!("{:?}", v1.dot(&v2));
 
-    println!("testing usage of old Vec3");
-    let av1 = Vec3::new(1.0, 1.0, 1.0);
-    let av2 = Vec3::new(1.0, 1.0, 1.0);
-    println!("{:?}", av1 * av2);
+    // format is:
+    // lens := radius thickness_short(/thickness_mid(/thickness_long)?)? (anamorphic)? (mtl_name|'air'|'iris') ior vno housing_radius ('#!aspheric='aspheric_correction)?
+    // radius := float
+    // thickness_short := float
+    // thickness_mid := float
+    // thickness_long := float
+    // anamorphic := 'cx_'
+    // mtl_name := word
+    // ior := float
+    // vno := float
+    // housing_radius := float
+    // aspheric_correction := (float','){3}float
 
-    println!("testing construction of input");
-    let input: Input = Input {
-        ray: Ray::new(
-            Point3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 0.0),
-            Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 1.0).normalized(),
-        ),
-        lambda: 450.0,
-    };
-    println!("{:?}", input.slice());
-    println!("testing trace spherical with given input");
-    let result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
-    match result {
-        Ok((ray, normal)) => {
-            println!("{:?}, {:?}", ray, normal);
+    let data = "# whatever
+65.22    9.60  N-SSK8 1.5 50 24.0
+-62.03   4.20  N-SF10 1.5 50 24.0
+-1240.67 5.00  air           24.0
+100000  105.00  iris          20.0";
+    let mut lenses: Vec<LensElement> = Vec::new();
+    lenses.push(LensElement {
+        radius: 65.22,
+        thickness_short: 9.6,
+        thickness_mid: 9.6,
+        thickness_long: 9.6,
+        anamorphic: false,
+        lens_type: LensType::Solid,
+        ior: 1.5,
+        vno: 50.0,
+        housing_radius: 24.0,
+        aspheric: 0,
+        correction: f32x4_ZERO,
+    });
+    lenses.push(LensElement {
+        radius: -62.03,
+        thickness_short: 4.2,
+        thickness_mid: 4.2,
+        thickness_long: 4.2,
+        anamorphic: false,
+        lens_type: LensType::Solid,
+        ior: 1.5,
+        vno: 50.0,
+        housing_radius: 24.0,
+        aspheric: 0,
+        correction: f32x4_ZERO,
+    });
+    lenses.push(LensElement {
+        radius: -1240.67,
+        thickness_short: 5.00,
+        thickness_mid: 5.00,
+        thickness_long: 5.00,
+        anamorphic: false,
+        lens_type: LensType::Air,
+        ior: 1.0,
+        vno: 0.0,
+        housing_radius: 24.0,
+        aspheric: 0,
+        correction: f32x4_ZERO,
+    });
+    lenses.push(LensElement {
+        radius: 10000.0,
+        thickness_short: 105.0,
+        thickness_mid: 105.0,
+        thickness_long: 105.0,
+        anamorphic: false,
+        lens_type: LensType::Aperture,
+        ior: 1.0,
+        vno: 0.0,
+        housing_radius: 20.0,
+        aspheric: 0,
+        correction: f32x4_ZERO,
+    });
+    for _ in 0..100 {
+        let input: Input = Input {
+            ray: Ray::new(
+                Point3::ZERO + Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, 0.0),
+                Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, 3.0).normalized(),
+            ),
+            lambda: 450.0,
+        };
+        let res = evaluate(&lenses, 0.0, input, 0);
+        match res {
+            Ok(output) => {
+                println!(
+                    "ray on outer pupil, transmittance: {:?}, {}",
+                    output.ray, output.tau
+                );
+            }
+            Err(error) => {
+                println!("errored with code {}", error);
+            }
         }
-        Err(error) => {
-            println!("error occurred with code {}", error);
-        }
-    };
-
-    println!("testing evaluate aspherical with given input");
-    let result = evaluate_aspherical(input.ray.origin, 0.9, 1, f32x4_ZERO);
-    println!("{}", result);
-    println!("testing evaluate aspherical derivative with given input");
-    let result = evaluate_aspherical_derivative(input.ray.origin, 0.9, 1, f32x4_ZERO);
-    println!("{}", result);
-    println!("testing trace aspherical with given input");
-    let result = trace_aspherical(input.ray, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
-    match result {
-        Ok((ray, normal)) => {
-            println!("{:?}, {:?}", ray, normal);
-        }
-        Err(error) => {
-            println!("error occurred with code {}", error);
-        }
-    };
-    println!("testing trace cylindrical with given input");
-    let trace_result = trace_cylindrical(input.ray, 0.9, 1.0, 0.9);
-    match trace_result {
-        Ok((ray, normal)) => {
-            println!("{:?}, {:?}", ray, normal);
-        }
-        Err(error) => {
-            println!("error occurred with code {}", error);
-        }
-    };
-    println!("testing fresnel with given input");
-    let result = fresnel(1.0, 1.45, 0.3, 0.6);
-    println!("{}", result);
-    println!("testing refract with given input");
-    let result = refract(1.0, 1.45, trace_result.unwrap().1, input.ray.direction);
-    println!("{:?}", result);
-    println!("testing plane_to_cs with given input");
-    let result = plane_to_cs(input.ray, 2.0);
-    println!("{:?}", result);
-    println!("testing cs_to_plane with given input");
-    let result = cs_to_plane(input.ray, 2.0);
-    println!("{:?}", result);
-    println!("testing sphere_to_cs with given input");
-    let result = sphere_to_cs(input.ray, 2.0, 1.0);
-    println!("{:?}", result);
-    println!("testing cs_to_sphere with given input");
-    let result = cs_to_sphere(input.ray, 2.0, 1.0);
-    println!("{:?}", result);
+    }
 }

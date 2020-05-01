@@ -1,6 +1,7 @@
 use crate::lens::*;
 use crate::math::*;
 use crate::spectrum::*;
+use rand::prelude::*;
 
 const INTENSITY_EPS: f32 = 0.0001;
 
@@ -248,7 +249,7 @@ pub fn cs_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray 
 }
 
 pub fn evaluate(
-    lenses: Vec<LensElement>,
+    lenses: &Vec<LensElement>,
     zoom: f32,
     input: Input,
     aspheric: i16,
@@ -268,7 +269,7 @@ pub fn evaluate(
         let r = -lens.radius;
         let dist = lens.get_thickness(zoom);
         distsum += dist;
-        let mut normal = Vec3::ZERO;
+        let mut normal;
         let res: (Ray, Vec3);
         if lens.anamorphic {
             res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
@@ -310,6 +311,83 @@ pub fn evaluate(
         ray,
         tau: intensity,
     })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_stuff() {
+        println!("testing usage of old Vec3");
+        let av1 = Vec3::new(1.0, 1.0, 1.0);
+        let av2 = Vec3::new(1.0, 1.0, 1.0);
+        println!("{:?}", av1 * av2);
+
+        println!("testing construction of input");
+        let input: Input = Input {
+            ray: Ray::new(
+                Point3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 0.0),
+                Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 1.0).normalized(),
+            ),
+            lambda: 450.0,
+        };
+        println!("{:?}", input.slice());
+        println!("testing trace spherical with given input");
+        let result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
+        match result {
+            Ok((ray, normal)) => {
+                println!("{:?}, {:?}", ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+
+        println!("testing evaluate aspherical with given input");
+        let result = evaluate_aspherical(input.ray.origin, 0.9, 1, f32x4_ZERO);
+        println!("{}", result);
+        println!("testing evaluate aspherical derivative with given input");
+        let result = evaluate_aspherical_derivative(input.ray.origin, 0.9, 1, f32x4_ZERO);
+        println!("{}", result);
+        println!("testing trace aspherical with given input");
+        let result = trace_aspherical(input.ray, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
+        match result {
+            Ok((ray, normal)) => {
+                println!("{:?}, {:?}", ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+        println!("testing trace cylindrical with given input");
+        let trace_result = trace_cylindrical(input.ray, 0.9, 1.0, 0.9);
+        match trace_result {
+            Ok((ray, normal)) => {
+                println!("{:?}, {:?}", ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+        println!("testing fresnel with given input");
+        let result = fresnel(1.0, 1.45, 0.3, 0.6);
+        println!("{}", result);
+        println!("testing refract with given input");
+        let result = refract(1.0, 1.45, trace_result.unwrap().1, input.ray.direction);
+        println!("{:?}", result);
+        println!("testing plane_to_cs with given input");
+        let result = plane_to_cs(input.ray, 2.0);
+        println!("{:?}", result);
+        println!("testing cs_to_plane with given input");
+        let result = cs_to_plane(input.ray, 2.0);
+        println!("{:?}", result);
+        println!("testing sphere_to_cs with given input");
+        let result = sphere_to_cs(input.ray, 2.0, 1.0);
+        println!("{:?}", result);
+        println!("testing cs_to_sphere with given input");
+        let result = cs_to_sphere(input.ray, 2.0, 1.0);
+        println!("{:?}", result);
+    }
 }
 
 // // evaluate scene to sensor:
