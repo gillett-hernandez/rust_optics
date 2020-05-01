@@ -1,7 +1,12 @@
+mod lens;
 mod math;
+mod spectrum;
+mod trace;
+
 use math::*;
 use packed_simd::f32x4;
 use rand::prelude::*;
+use trace::*;
 
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
@@ -70,5 +75,17 @@ fn main() {
     println!("{}", result);
     println!("testing refract with given input");
     let result = refract(1.0, 1.45, trace_result.unwrap().1, input.ray.direction);
+    println!("{:?}", result);
+    println!("testing plane_to_cs with given input");
+    let result = plane_to_cs(input.ray, 2.0);
+    println!("{:?}", result);
+    println!("testing cs_to_plane with given input");
+    let result = cs_to_plane(input.ray, 2.0);
+    println!("{:?}", result);
+    println!("testing sphere_to_cs with given input");
+    let result = sphere_to_cs(input.ray, 2.0, 1.0);
+    println!("{:?}", result);
+    println!("testing cs_to_sphere with given input");
+    let result = cs_to_sphere(input.ray, 2.0, 1.0);
     println!("{:?}", result);
 }

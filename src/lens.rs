@@ -1,48 +1,67 @@
 // #pragma once
 
-// #include <stdint.h>
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <string.h>
-// #include <strings.h>
+use crate::math::*;
 
-// typedef struct lens_element_t
-// {
-//   float lens_radius, thickness_short, thickness_mid, thickness_long, ior, vno, housing_radius;
-//   float aspheric_correction_coefficients[4];
-//   int aspheric;
-//   int anamorphic;
-//   char material[32];
-// }
-// lens_element_t;
+#[derive(Copy, Clone, Debug)]
+pub enum LensType {
+    Lens,
+    Aperture,
+}
 
-// static inline float lens_get_thickness(const lens_element_t *lens, float zoom)
-// {
-//   if(zoom < .5f) return lens->thickness_short*(1.0f-2.0f*zoom) + lens->thickness_mid*2.0f*zoom;
-//   else           return lens->thickness_mid*(1.0f-2.0f*(zoom-.5f)) + lens->thickness_long*(zoom-.5f)*2.0f;
-// }
+#[derive(Copy, Clone, Debug)]
+pub struct LensElement {
+    pub radius: f32,
+    pub thickness_short: f32,
+    pub thickness_mid: f32,
+    pub thickness_long: f32,
+    pub housing_radius: f32,
+    pub ior: f32, // index of refraction
+    pub vno: f32, // abbe number
+    pub correction: f32x4,
+    pub aspheric: i32,
+    pub anamorphic: bool,
+    pub lens_type: LensType,
+}
 
-// float lens_get_aperture_radius(lens_element_t *l, int num)
-// {
-//   for(int k=0;k<num;k++)
-//   {
-//     if(!strcasecmp(l[k].material, "iris"))
-//       return l[k].housing_radius;
-//   }
-//   return 0.0f;
-// }
-
-// float lens_get_aperture_pos(lens_element_t *l, int num, float zoom)
-// {
-//   float pos = 0;
-//   int k = 0;
-//   while(strcasecmp(l[k].material, "iris") && k < num)
-//   {
-//       pos += lens_get_thickness(l+k, zoom);
-//       k++;
-//   }
-//   return pos;
-// }
+impl LensElement {
+    pub fn get_thickness(self, mut zoom: f32) -> f32 {
+        if zoom < 0.5 {
+            zoom *= 2.0;
+            self.thickness_short * (1.0 - zoom) + self.thickness_mid * zoom
+        } else {
+            zoom -= 0.5;
+            zoom *= 2.0;
+            self.thickness_mid * (1.0 - zoom) + self.thickness_long * zoom
+        }
+    }
+    pub fn get_aperture_radius(slice: &[Self]) -> f32 {
+        for elem in slice {
+            match elem.lens_type {
+                LensType::Aperture => {
+                    return elem.housing_radius;
+                }
+                _ => {
+                    continue;
+                }
+            }
+        }
+        0.0
+    }
+    pub fn get_aperture_pos(slice: &[Self], zoom: f32) -> f32 {
+        let mut pos = 0.0;
+        for elem in slice {
+            match elem.lens_type {
+                LensType::Aperture => {
+                    break;
+                }
+                _ => {
+                    pos += elem.get_thickness(zoom);
+                }
+            }
+        }
+        pos
+    }
+}
 
 // int lens_configuration(lens_element_t *l, const char *filename, int max)
 // {
@@ -71,8 +90,8 @@
 //     // munch comment
 //     if(!strncmp(line, "//", 2) || !strncmp(line, "#", 1)) continue;
 //     while(in[0] == '\t' || in[0] == ' ') in++;
-//     lens.lens_radius = scale * strtof(in, &in);
-//     if(lens.lens_radius == 0.0f) break;
+//     lens.radius = scale * strtof(in, &in);
+//     if(lens.radius == 0.0f) break;
 //     while(in[0] == '\t' || in[0] == ' ') in++;
 //     lens.thickness_short = scale * strtof(in, &in);
 //     while(in[0] == '\t' || in[0] == ' ') in++;
