@@ -195,22 +195,10 @@ pub fn cs_to_plane(ray_in: Ray, plane_pos: f32) -> Ray {
     let t = (plane_pos - z) / dz;
     // TODO: double check that the z members of origin and direction should or should not be 0.0
     Ray::new(
-        Point3::new(x + t * dx, y + t * dy, 0.0),
-        Vec3::new(dx / dz.abs(), dy / dz.abs(), 0.0),
+        Point3::new(x + t * dx, y + t * dy, z),
+        Vec3::new(dx / dz.abs(), dy / dz.abs(), dz),
     )
 }
-
-// static inline void csToPlane(const float *inpos, const float *indir, float *outpos, float *outdir, const float planepos)
-// {
-//   //intersection with plane at z = planepos
-//   const double t = (planepos - inpos[2]) / indir[2];
-
-//   outpos[0] = inpos[0] + t * indir[0];
-//   outpos[1] = inpos[1] + t * indir[1];
-
-//   outdir[0] = indir[0] / fabsf(indir[2]);
-//   outdir[1] = indir[1] / fabsf(indir[2]);
-// }
 
 pub fn sphere_to_cs(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray {
     let [x, y, _, _]: [f32; 4] = ray_in.origin.0.into();
@@ -241,8 +229,8 @@ pub fn cs_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray 
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
     // TODO: determine if these `replace`s are correct or not. in the original c code, they were mutable parameters and the z components were unchanged.
     Ray::new(
-        ray_in.origin,
-        // Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
+        // ray_in.origin,
+        Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
         frame.to_local(&temp_direction),
         // Vec3::from_raw(frame.to_local(&temp_direction).0.replace(2, 0.0)),
     )
