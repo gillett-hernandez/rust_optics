@@ -90,7 +90,7 @@ fn main() -> std::io::Result<()> {
         let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
         Ray::new(
             Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
-            Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+            Vec3::new(x2 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
         )
     };
     let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
