@@ -1,3 +1,4 @@
+#![allow(unused_imports, dead_code, unused_variables)]
 mod lens;
 mod math;
 mod spectrum;
@@ -16,6 +17,7 @@ pub use na::{Matrix3, Vector3};
 use std::fs::File;
 use std::io::prelude::*;
 
+#[allow(unused_mut)]
 fn simulate(
     lenses: &Vec<LensElement>,
     mut sampler: &mut Box<dyn Sampler>,
@@ -44,13 +46,8 @@ fn simulate(
     );
     (inputs, outputs)
 }
-
+#[allow(unused_mut)]
 fn main() -> std::io::Result<()> {
-    println!("testing usage of new Vector3 as defined in nalgebra");
-    let v1: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
-    let v2: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
-    println!("{:?}", v1.dot(&v2));
-
     //     let lines = "# whatever
     // 65.22    9.60  N-SSK8 1.5 50 24.0
     // -62.03   4.20  N-SF10 1.5 50 24.0
@@ -105,7 +102,7 @@ fn main() -> std::io::Result<()> {
         1000000,
     );
 
-    use std::io::{BufWriter, Seek, SeekFrom};
+    use std::io::BufWriter;
     let mut file = BufWriter::new(File::create("output.txt")?);
     // for (input, output) in inputs.iter().zip(outputs.iter()) {
     //     file.write(
@@ -167,7 +164,7 @@ fn main() -> std::io::Result<()> {
                 input.lambda
             )
             .as_bytes(),
-        );
+        )?;
         if let Some(output) = output {
             let normal_ray = sphere_to_cs(output.ray, -lens0.radius, lens0.radius);
             let (exterior_point, normal) = (normal_ray.origin, normal_ray.direction.normalized());
@@ -187,9 +184,9 @@ fn main() -> std::io::Result<()> {
                     output.tau
                 )
                 .as_bytes(),
-            );
+            )?;
         } else {
-            file.write(b" !\n");
+            file.write(b" !\n")?;
         }
     }
 

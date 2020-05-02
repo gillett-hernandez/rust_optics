@@ -2,20 +2,20 @@ pub fn spectrum_cauchy_from_abbe_num(nd: f32, vd: f32) -> (f32, f32) {
     if vd == 0.0 {
         (nd, 0.0)
     } else {
-        const lC: f32 = 0.6563;
-        const lF: f32 = 0.4861;
-        const lD: f32 = 0.587561;
-        const lC2: f32 = lC * lC;
-        const lF2: f32 = lF * lF;
-        const c: f32 = lC2 * lF2 / (lC2 - lF2);
-        let B = (nd - 1.0) / vd * c;
-        (nd - B / (lD * lD), B)
+        const LC: f32 = 0.6563;
+        const LF: f32 = 0.4861;
+        const LD: f32 = 0.587561;
+        const LC2: f32 = LC * LC;
+        const LF2: f32 = LF * LF;
+        const C: f32 = LC2 * LF2 / (LC2 - LF2);
+        let b = (nd - 1.0) / vd * C;
+        (nd - b / (LD * LD), b)
     }
 }
 
 pub fn spectrum_eta_from_abbe_num(nd: f32, vd: f32, lambda: f32) -> f32 {
-    let (A, B) = spectrum_cauchy_from_abbe_num(nd, vd);
-    A + B / (lambda * lambda)
+    let (a, b) = spectrum_cauchy_from_abbe_num(nd, vd);
+    a + b / (lambda * lambda)
 }
 
 // static inline void spectrum_xyz_to_rgb(const float *const xyz, float *rgb)

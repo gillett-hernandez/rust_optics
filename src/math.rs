@@ -1,9 +1,3 @@
-// // for raytrace_dot etc
-// #include "spectrum.h"
-// #include "lenssystem.h"
-// #include <stdio.h>
-// #include <strings.h>
-
 pub use packed_simd::f32x4;
 use rand::prelude::*;
 use std::f32::INFINITY;
@@ -12,11 +6,8 @@ use std::ops::{Add, Div, Mul, MulAssign, Neg, Sub};
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng, RngCore};
 
+#[allow(non_upper_case_globals)]
 pub const f32x4_ZERO: f32x4 = f32x4::new(0.0, 0.0, 0.0, 0.0);
-
-pub fn random_between(a: f32, b: f32) -> f32 {
-    random::<f32>() * (b - a) + a
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Vec3(pub f32x4);

@@ -258,7 +258,6 @@ pub fn evaluate(
         let r = -lens.radius;
         let dist = lens.thickness_at(zoom);
         distsum += dist;
-        let mut normal;
         let res: (Ray, Vec3);
         if lens.anamorphic {
             res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
@@ -275,7 +274,7 @@ pub fn evaluate(
             res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
         }
         ray = res.0;
-        normal = res.1;
+        let normal = res.1;
         let n2 = if k > 0 {
             spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
         } else {
@@ -302,25 +301,224 @@ pub fn evaluate(
     })
 }
 
+// evaluate scene to sensor:
+pub fn evaluate_reverse(
+    lenses: &Vec<LensElement>,
+    zoom: f32,
+    input: Input,
+    aspheric: i16,
+) -> Result<Output, i32> {
+    assert!(lenses.len() > 0);
+    let mut error = 0;
+    let mut n1 = 1.0;
+    let mut ray: Ray;
+    let mut intensity = 1.0;
+    ray = sphere_to_cs(input.ray, 0.0, lenses[0].radius);
+    let mut distsum = 0.0;
+    ray.direction = -ray.direction;
+    for (_k, lens) in lenses.iter().enumerate() {
+        let r = lens.radius;
+        let dist = lens.thickness_at(zoom);
+        let res: (Ray, Vec3);
+        if lens.anamorphic {
+            res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
+        } else if aspheric > 0 {
+            res = trace_aspherical(
+                ray,
+                r,
+                distsum + r,
+                lens.aspheric,
+                lens.correction,
+                lens.housing_radius,
+            )?;
+        } else {
+            res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
+        }
+        ray = res.0;
+        let normal = res.1;
+        let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
+        // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
+        let res = refract(n1, n2, normal, ray.direction);
+        ray.direction = res.0;
+        intensity *= res.1;
+        if intensity < INTENSITY_EPS {
+            error |= 8;
+        }
+        if error > 0 {
+            return Err(error);
+        }
+        // not sure why this normalize is here.
+        ray.direction = ray.direction.normalized();
+        distsum += dist;
+        n1 = n2;
+    }
+    ray = cs_to_plane(ray, distsum);
+    Ok(Output {
+        ray,
+        tau: intensity,
+    })
+}
+
+// traces rays from the sensor to aperture
+pub fn evaluate_aperture(
+    lenses: &Vec<LensElement>,
+    zoom: f32,
+    input: Input,
+    aspheric: i16,
+) -> Result<Output, i32> {
+    assert!(lenses.len() > 0);
+    let mut error = 0;
+    let mut n1 = spectrum_eta_from_abbe_num(
+        lenses.last().unwrap().ior,
+        lenses.last().unwrap().vno,
+        input.lambda,
+    );
+    let mut ray: Ray;
+    let mut intensity = 1.0;
+    ray = plane_to_cs(input.ray, 0.0);
+    let mut distsum = 0.0;
+    for (k, lens) in lenses.iter().rev().enumerate() {
+        let r = -lens.radius;
+        let dist = lens.thickness_at(zoom);
+        distsum += dist;
+        if lens.lens_type == LensType::Aperture {
+            break;
+        }
+        let res: (Ray, Vec3);
+        if lens.anamorphic {
+            res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
+        } else if aspheric > 0 {
+            res = trace_aspherical(
+                ray,
+                r,
+                distsum + r,
+                lens.aspheric,
+                lens.correction,
+                lens.housing_radius,
+            )?;
+        } else {
+            res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
+        }
+        ray = res.0;
+        let normal = res.1;
+        let n2 = if k > 0 {
+            spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
+        } else {
+            1.0
+        };
+        // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
+        let res = refract(n1, n2, normal, ray.direction);
+        ray.direction = res.0;
+        intensity *= res.1;
+        if intensity < INTENSITY_EPS {
+            error |= 8;
+        }
+        if error > 0 {
+            return Err(error);
+        }
+        // not sure why this normalize is here.
+        ray.direction = ray.direction.normalized();
+        n1 = n2;
+    }
+    ray = cs_to_sphere(ray, distsum - lenses[0].radius, lenses[0].radius);
+    Ok(Output {
+        ray,
+        tau: intensity,
+    })
+}
+
+// evaluate scene to sensor:
+pub fn evaluate_aperture_reverse(
+    lenses: &Vec<LensElement>,
+    zoom: f32,
+    input: Input,
+    aspheric: i16,
+) -> Result<Output, i32> {
+    assert!(lenses.len() > 0);
+    let mut error = 0;
+    let mut n1 = 1.0;
+    let mut ray: Ray;
+    let mut intensity = 1.0;
+    ray = sphere_to_cs(input.ray, 0.0, lenses[0].radius);
+    let mut distsum = 0.0;
+    ray.direction = -ray.direction;
+    for (_k, lens) in lenses.iter().enumerate() {
+        let r = lens.radius;
+        let dist = lens.thickness_at(zoom);
+        let normal;
+        let res: (Ray, Vec3);
+        if lens.anamorphic {
+            res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
+        } else if aspheric > 0 {
+            res = trace_aspherical(
+                ray,
+                r,
+                distsum + r,
+                lens.aspheric,
+                lens.correction,
+                lens.housing_radius,
+            )?;
+        } else {
+            res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
+        }
+        ray = res.0;
+        normal = res.1;
+        let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
+        // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
+        let res = refract(n1, n2, normal, ray.direction);
+        ray.direction = res.0;
+        intensity *= res.1;
+        if intensity < INTENSITY_EPS {
+            error |= 8;
+        }
+        if error > 0 {
+            return Err(error);
+        }
+        // not sure why this normalize is here.
+        ray.direction = ray.direction.normalized();
+        distsum += dist;
+        if lens.lens_type == LensType::Aperture {
+            break;
+        }
+        n1 = n2;
+    }
+    ray = cs_to_plane(ray, distsum);
+    Ok(Output {
+        ray,
+        tau: intensity,
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     #[test]
-    fn test_stuff() {
+    fn test_old_vec3() {
         println!("testing usage of old Vec3");
         let av1 = Vec3::new(1.0, 1.0, 1.0);
         let av2 = Vec3::new(1.0, 1.0, 1.0);
         println!("{:?}", av1 * av2);
+    }
 
-        println!("testing construction of input");
-        let input: Input = Input {
+    fn basic_input() -> Input {
+        Input {
             ray: Ray::new(
                 Point3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 0.0),
                 Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 1.0).normalized(),
             ),
             lambda: 450.0,
-        };
+        }
+    }
+
+    #[test]
+    fn test_input() {
+        println!("testing construction of input");
+        let input: Input = basic_input();
         println!("{:?}", input.slice());
+    }
+    #[test]
+    fn test_trace_spherical() {
+        let input: Input = basic_input();
         println!("testing trace spherical with given input");
         let result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
         match result {
@@ -331,13 +529,25 @@ mod test {
                 println!("error occurred with code {}", error);
             }
         };
-
+    }
+    #[test]
+    fn test_evaluate_aspherical() {
+        let input: Input = basic_input();
         println!("testing evaluate aspherical with given input");
         let result = evaluate_aspherical(input.ray.origin, 0.9, 1, f32x4_ZERO);
         println!("{}", result);
+    }
+    #[test]
+    fn test_evaluate_aspherical_derivative() {
+        let input: Input = basic_input();
         println!("testing evaluate aspherical derivative with given input");
         let result = evaluate_aspherical_derivative(input.ray.origin, 0.9, 1, f32x4_ZERO);
         println!("{}", result);
+    }
+    #[test]
+    fn test_trace_aspherical() {
+        let input: Input = basic_input();
+
         println!("testing trace aspherical with given input");
         let result = trace_aspherical(input.ray, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
         match result {
@@ -348,6 +558,10 @@ mod test {
                 println!("error occurred with code {}", error);
             }
         };
+    }
+    #[test]
+    fn test_trace_cylindrical() {
+        let input: Input = basic_input();
         println!("testing trace cylindrical with given input");
         let trace_result = trace_cylindrical(input.ray, 0.9, 1.0, 0.9);
         match trace_result {
@@ -358,6 +572,12 @@ mod test {
                 println!("error occurred with code {}", error);
             }
         };
+    }
+    #[test]
+    fn test_other_functions() {
+        let input: Input = basic_input();
+
+        let trace_result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
         println!("testing fresnel with given input");
         let result = fresnel(1.0, 1.45, 0.3, 0.6);
         println!("{}", result);
@@ -377,210 +597,82 @@ mod test {
         let result = cs_to_sphere(input.ray, 2.0, 1.0);
         println!("{:?}", result);
     }
+
+    fn construct_lenses() -> Vec<LensElement> {
+        let lines = "# whatever
+65.22    9.60  N-SSK8 1.5 50 24.0
+-62.03   4.20  N-SF10 1.5 50 24.0
+-1240.67 5.00  air           24.0
+100000  105.00  iris          20.0"
+            .lines();
+        let mut lenses: Vec<LensElement> = Vec::new();
+        let (mut last_ior, mut last_vno) = (1.0, 0.0);
+        for line in lines {
+            if line.starts_with("#") {
+                continue;
+            }
+            let lens = LensElement::parse_from(line, last_ior, last_vno).unwrap();
+            last_ior = lens.ior;
+            last_vno = lens.vno;
+            println!("successfully parsed lens {:?}", lens);
+            lenses.push(lens);
+        }
+        lenses
+    }
+    #[allow(unused_mut)]
+    #[test]
+    fn test_evaluate() {
+        let lenses = construct_lenses();
+
+        let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+        // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+        let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+            let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+            Ray::new(
+                Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
+                Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+            )
+        };
+        let wavelength_sampler =
+            |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+        let input = Input {
+            ray: ray_sampler(&mut sampler),
+            lambda: wavelength_sampler(&mut sampler),
+        };
+
+        let maybe_output = evaluate(&lenses, 0.0, input, 0);
+        println!("{:?}", input);
+        if let Ok(output) = maybe_output {
+            println!("{:?}", output);
+        }
+    }
+    #[allow(unused_mut)]
+    #[test]
+    fn test_evaluate_aperture() {
+        let lenses = construct_lenses();
+
+        let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+        // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+        let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+            let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+            Ray::new(
+                Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
+                Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+            )
+        };
+        let wavelength_sampler =
+            |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+        let input = Input {
+            ray: ray_sampler(&mut sampler),
+            lambda: wavelength_sampler(&mut sampler),
+        };
+
+        let maybe_output = evaluate_aperture(&lenses, 0.0, input, 0);
+        println!("{:?}", input);
+        if let Ok(output) = maybe_output {
+            println!("{:?}", output);
+        }
+    }
 }
-
-// // evaluate scene to sensor:
-// static inline int evaluate_reverse(const lens_element_t *lenses, const int lenses_cnt, const float zoom, const float *in, float *out, int aspheric)
-// {
-//   int error = 0;
-//   float n1 = 1.0f;
-//   float pos[3], dir[3];
-//   float intensity = 1.0f;
-
-//   sphereToCs(in, in + 2, pos, dir, 0, lenses[0].radius);
-
-//   for(int i = 0; i < 2; i++) dir[i] = -dir[i];
-
-//   float distsum = 0;
-
-//   for(int k=0;k<lenses_cnt;k++)
-//   {
-//     const float R = lenses[k].radius;
-//     float t = 0.0f;
-//     const float dist = lens_thickness_at(lenses+k, zoom);
-
-//     //normal at intersection
-//     float n[3] = {0.0};
-
-//     if(lenses[k].anamorphic)
-//       error |= cylindrical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-//     else if(aspheric)
-//       error |= aspherical(pos, dir, &t, R, distsum + R, lenses[k].aspheric, lenses[k].aspheric_correction_coefficients, lenses[k].housing_radius, n);
-//     else
-//       error |= spherical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-
-//     // index of refraction and ratio current/next:
-//     const float n2 = spectrum_eta_from_abbe_um(lenses[k].ior, lenses[k].vno, in[4]);
-//     intensity *= refract(n1, n2, n, dir);
-//     if(intensity < INTENSITY_EPS) error |= 8;
-
-//     if(error)
-//       return error;
-
-//     // and renormalise:
-//     raytrace_normalise(dir);
-
-//     distsum += dist;
-//     n1 = n2;
-//   }
-//   // return [x,y,dx,dy,lambda]
-//   csToPlane(pos, dir, out, out + 2, distsum);
-//   out[4] = intensity;
-//   return error;
-// }
-
-// static inline int evaluate_aperture(const lens_element_t *lenses, const int lenses_cnt, const float zoom, const float *in, float *out, int aspheric)
-// {
-//   int error = 0;
-//   float n1 = spectrum_eta_from_abbe_um(lenses[lenses_cnt-1].ior, lenses[lenses_cnt-1].vno, in[4]);
-//   float pos[3], dir[3];
-//   float intensity = 1.0f;
-
-//   planeToCs(in, in + 2, pos, dir, 0);
-
-//   float distsum = 0;
-
-//   for(int k=lenses_cnt-1;k>=0;k--)
-//   {
-//     // propagate the ray reverse to the plane of intersection optical axis/lens element:
-//     const float R = -lenses[k].radius; // negative, evaluate() is the adjoint case
-//     float t = 0.0f;
-//     const float dist = lens_thickness_at(lenses+k, zoom);
-//     distsum += dist;
-
-//     // stop after moving to aperture.
-//     if(!strcasecmp(lenses[k].material, "iris")) break;
-
-//     //normal at intersection
-//     float n[3] = {0.0f};
-
-//     if(lenses[k].anamorphic)
-//       error |= cylindrical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-//     else if(aspheric)
-//       error |= aspherical(pos, dir, &t, R, distsum + R, lenses[k].aspheric, lenses[k].aspheric_correction_coefficients, lenses[k].housing_radius, n);
-//     else
-//       error |= spherical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-
-//     // index of refraction and ratio current/next:
-//     const float n2 = k ? spectrum_eta_from_abbe_um(lenses[k-1].ior, lenses[k-1].vno, in[4]) : 1.0f; // outside the lens there is vacuum
-//     intensity *= refract(n1, n2, n, dir);
-//     if(intensity < INTENSITY_EPS) error |= 8;
-//     if(error)
-//       return error;
-
-//     // mark this ray as theoretically dead:
-//     //if(dir[2] <= 0.0f) return error |= 2;
-//     // and renormalise:
-//     raytrace_normalise(dir);
-
-//     n1 = n2;
-//   }
-//   // return [x,y,dx,dy,lambda]
-//   csToPlane(pos, dir, out, out + 2, distsum);
-//   out[4] = intensity;
-//   return error;
-// }
-
-// // evaluate scene to sensor:
-// static inline int evaluate_aperture_reverse(const lens_element_t *lenses, const int lenses_cnt, const float zoom, const float *in, float *out, int aspheric)
-// {
-//   int error = 0;
-//   float n1 = 1.0f;
-//   float pos[3], dir[3];
-//   float intensity = 1.0f;
-
-//   sphereToCs(in, in + 2, pos, dir, 0, lenses[0].radius);
-//   for(int i = 0; i < 2; i++) dir[i] = -dir[i];
-
-//   float distsum = 0;
-//   for(int k=0;k<lenses_cnt;k++)
-//   {
-//     const float R = lenses[k].radius;
-//     float t = 0.0f;
-//     const float dist = lens_thickness_at(lenses+k, zoom);
-
-//     //normal at intersection
-//     float n[3];
-
-//     if(lenses[k].anamorphic)
-//       error |= cylindrical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-//     else if(aspheric)
-//       error |= aspherical(pos, dir, &t, R, distsum + R, lenses[k].aspheric, lenses[k].aspheric_correction_coefficients, lenses[k].housing_radius, n);
-//     else
-//       error |= spherical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-
-//     // index of refraction and ratio current/next:
-//     const float n2 = spectrum_eta_from_abbe_um(lenses[k].ior, lenses[k].vno, in[4]);
-//     intensity *= refract(n1, n2, n, dir);
-//     if(intensity < INTENSITY_EPS) error |= 8;
-//     if(error)
-//       return error;
-
-//     // and renormalise:
-//     raytrace_normalise(dir);
-
-//     // move to next interface:
-//     distsum += dist;
-
-//     // stop after processing aperture but before moving to next element
-//     if(k < lenses_cnt-1 && !strcasecmp(lenses[k+1].material, "iris")) break;
-
-//     n1 = n2;
-//   }
-//   // return [x,y,dx,dy,lambda]
-//   csToPlane(pos, dir, out, out + 2, distsum);
-//   out[4] = intensity;
-//   return error;
-// }
-
-// // evaluate scene to sensor:
-// evaluate_aperture_reverse(const lens_element_t *lenses, const int lenses_cnt, const float zoom, const float *in, float *out, int aspheric)
-// {
-//   int error = 0;
-//   float n1 = 1.0f;
-//   float pos[3], dir[3];
-//   float intensity = 1.0f;
-
-//   sphereToCs(in, in + 2, pos, dir, 0, lenses[0].radius);
-//   for(int i = 0; i < 2; i++) dir[i] = -dir[i];
-
-//   float distsum = 0;
-//   for(int k=0;k<lenses_cnt;k++)
-//   {
-//     const float R = lenses[k].radius;
-//     float t = 0.0f;
-//     const float dist = lens_thickness_at(lenses+k, zoom);
-
-//     //normal at intersection
-//     float n[3];
-
-//     if(lenses[k].anamorphic)
-//       error |= cylindrical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-//     else if(aspheric)
-//       error |= aspherical(pos, dir, &t, R, distsum + R, lenses[k].aspheric, lenses[k].aspheric_correction_coefficients, lenses[k].housing_radius, n);
-//     else
-//       error |= spherical(pos, dir, &t, R, distsum + R, lenses[k].housing_radius, n);
-
-//     // index of refraction and ratio current/next:
-//     const float n2 = spectrum_eta_from_abbe_um(lenses[k].ior, lenses[k].vno, in[4]);
-//     intensity *= refract(n1, n2, n, dir);
-//     if(intensity < INTENSITY_EPS) error |= 8;
-//     if(error)
-//       return error;
-
-//     // and renormalise:
-//     raytrace_normalise(dir);
-
-//     // move to next interface:
-//     distsum += dist;
-
-//     // stop after processing aperture but before moving to next element
-//     if(k < lenses_cnt-1 && !strcasecmp(lenses[k+1].material, "iris")) break;
-
-//     n1 = n2;
-//   }
-//   // return [x,y,dx,dy,lambda]
-//   csToPlane(pos, dir, out, out + 2, distsum);
-//   out[4] = intensity;
-//   return error;
-// }

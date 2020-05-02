@@ -2,6 +2,8 @@
 
 use crate::math::*;
 
+use std::cmp::PartialEq;
+
 #[derive(Copy, Clone, Debug)]
 pub enum LensType {
     Solid,
@@ -22,6 +24,12 @@ pub struct LensElement {
     pub housing_radius: f32,
     pub aspheric: i32,
     pub correction: f32x4,
+}
+
+impl PartialEq for LensType {
+    fn eq(&self, other: &LensType) -> bool {
+        self == other
+    }
 }
 
 impl LensElement {
@@ -181,7 +189,7 @@ mod test {
     fn test_parse() {
         let test_string = "65.22 9.60  N-SSK8 1.5 50 24.0";
         // LensElement::parse_from(test_string);
-        let lens = LensElement::parse_from(test_string);
+        let lens = LensElement::parse_from(test_string, 1.0, 0.0);
         println!("{:?}", lens);
     }
 }
