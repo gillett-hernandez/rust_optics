@@ -21,7 +21,7 @@ use std::io::prelude::*;
 fn simulate(
     lenses: &Vec<LensElement>,
     mut sampler: &mut Box<dyn Sampler>,
-    ray_sampler: fn(&mut Box<dyn Sampler>) -> Ray,
+    ray_sampler: fn(&mut Box<dyn Sampler>) -> PlaneRay,
     wavelength_sampler: fn(&mut Box<dyn Sampler>) -> f32,
     iterations: usize,
 ) -> (Vec<Input>, Vec<Option<Output>>) {
@@ -85,12 +85,14 @@ fn main() -> std::io::Result<()> {
 
     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-    let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+    let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
         let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
         let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-        Ray::new(
-            Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
-            Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+        PlaneRay::new(
+            35.0 * (1.0 - x1),
+            35.0 * (1.0 - x1),
+            x2 * 2.0 - 1.0,
+            y2 * 2.0 - 1.0,
         )
     };
     let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;

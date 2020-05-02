@@ -400,6 +400,12 @@ pub struct PlaneRay {
     pub v: f32,
 }
 
+impl PlaneRay {
+    pub fn new(x: f32, y: f32, u: f32, v: f32) {
+        Self { x, y, u, v }
+    }
+}
+
 pub struct SphereRay {
     pub x: f32,
     pub y: f32,
