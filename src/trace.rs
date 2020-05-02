@@ -229,8 +229,8 @@ pub fn cs_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray 
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
     // TODO: determine if these `replace`s are correct or not. in the original c code, they were mutable parameters and the z components were unchanged.
     Ray::new(
-        // ray_in.origin,
-        Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
+        ray_in.origin,
+        // Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
         frame.to_local(&temp_direction),
         // Vec3::from_raw(frame.to_local(&temp_direction).0.replace(2, 0.0)),
     )
@@ -301,7 +301,7 @@ pub fn evaluate(
     })
 }
 
-// evaluate scene to sensor:
+// evaluate scene to sensor
 pub fn evaluate_reverse(
     lenses: &Vec<LensElement>,
     zoom: f32,
@@ -599,11 +599,21 @@ mod test {
     }
 
     fn construct_lenses() -> Vec<LensElement> {
-        let lines = "# whatever
-65.22    9.60  N-SSK8 1.5 50 24.0
--62.03   4.20  N-SF10 1.5 50 24.0
--1240.67 5.00  air           24.0
-100000  105.00  iris          20.0"
+        let lines = "164.12		10.99				SF5			1.673	32.2	54
+559.28		0.23				air							54
+100.12		11.45				BAF10		1.67	47.1    51
+213.54		0.23				air							51
+58.04		22.95				LAK9		1.691	54.7	41
+2551		2.58				SF5			1.673	32.2	41
+32.39		15.66				air							27
+10000		15.00				IRIS						25.5
+-40.42		2.74				SF15		1.699	30.1	25
+192.98		27.92				SK16		1.62	60.3	36
+-55.53		0.23				air							36
+192.98		7.98				LAK9		1.691	54.7	35
+-225.28		0.23				air							35
+175.1		8.48				LAK9		1.691	54.7	35
+-203.54		55.742				air							35"
             .lines();
         let mut lenses: Vec<LensElement> = Vec::new();
         let (mut last_ior, mut last_vno) = (1.0, 0.0);
@@ -664,12 +674,44 @@ mod test {
         };
         let wavelength_sampler =
             |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+        loop {
+            let input = Input {
+                ray: ray_sampler(&mut sampler),
+                lambda: wavelength_sampler(&mut sampler),
+            };
+
+            let maybe_output = evaluate_aperture(&lenses, 0.0, input, 0);
+            println!("{:?}", input);
+            if let Ok(output) = maybe_output {
+                println!("{:?}", output);
+                break;
+            }
+        }
+    }
+
+    #[allow(unused_mut)]
+    #[test]
+    fn test_evaluate_reverse() {
+        let lenses = construct_lenses();
+
+        let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+        // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+        let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+            let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+            Ray::new(
+                Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
+                Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+            )
+        };
+        let wavelength_sampler =
+            |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
         let input = Input {
             ray: ray_sampler(&mut sampler),
             lambda: wavelength_sampler(&mut sampler),
         };
 
-        let maybe_output = evaluate_aperture(&lenses, 0.0, input, 0);
+        let maybe_output = evaluate_reverse(&lenses, 0.0, input, 0);
         println!("{:?}", input);
         if let Ok(output) = maybe_output {
             println!("{:?}", output);

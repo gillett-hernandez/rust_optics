@@ -4,7 +4,7 @@ use crate::math::*;
 
 use std::cmp::PartialEq;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LensType {
     Solid,
     Air,
@@ -26,12 +26,6 @@ pub struct LensElement {
     pub correction: f32x4,
 }
 
-impl PartialEq for LensType {
-    fn eq(&self, other: &LensType) -> bool {
-        self == other
-    }
-}
-
 impl LensElement {
     pub fn thickness_at(self, mut zoom: f32) -> f32 {
         if zoom < 0.5 {
@@ -45,13 +39,8 @@ impl LensElement {
     }
     pub fn aperture_radius(slice: &[Self]) -> f32 {
         for elem in slice {
-            match elem.lens_type {
-                LensType::Aperture => {
-                    return elem.housing_radius;
-                }
-                _ => {
-                    continue;
-                }
+            if elem.lens_type == LensType::Aperture {
+                return elem.housing_radius;
             }
         }
         0.0
@@ -59,14 +48,10 @@ impl LensElement {
     pub fn aperture_pos(slice: &[Self], zoom: f32) -> f32 {
         let mut pos = 0.0;
         for elem in slice {
-            match elem.lens_type {
-                LensType::Aperture => {
-                    break;
-                }
-                _ => {
-                    pos += elem.thickness_at(zoom);
-                }
+            if elem.lens_type == LensType::Aperture {
+                break;
             }
+            pos += elem.thickness_at(zoom);
         }
         pos
     }
