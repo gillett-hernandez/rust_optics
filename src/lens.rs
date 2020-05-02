@@ -129,7 +129,6 @@ impl LensElement {
                 vno = token2
                     .parse::<f32>()
                     .map_err(|e| "err parsing float at vno")?;
-                println!("ior {} vno {}", ior, vno);
                 housing_radius = tokens
                     .next()
                     .ok_or("ran out of tokens at housing radius branch 1")?
@@ -139,8 +138,14 @@ impl LensElement {
             }
             (Some(token1), None) => {
                 // this must be the situation where there is a housing radius but no aspheric correction.
-                ior = default_ior;
-                vno = default_vno;
+                ior = match lens_type {
+                    LensType::Solid => default_ior,
+                    _ => 1.0,
+                };
+                vno = match lens_type {
+                    LensType::Solid => default_vno,
+                    _ => 0.0,
+                };
                 housing_radius = token1
                     .parse::<f32>()
                     .map_err(|e| "error parsing float at housing radius branch 2")?;

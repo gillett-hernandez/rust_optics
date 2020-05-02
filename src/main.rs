@@ -5,24 +5,73 @@ mod trace;
 
 use lens::*;
 use math::*;
+use trace::*;
+
 use packed_simd::f32x4;
 use rand::prelude::*;
-use trace::*;
 
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
 
-fn main() {
+use std::fs::File;
+use std::io::prelude::*;
+
+fn simulate(
+    lenses: &Vec<LensElement>,
+    mut sampler: &mut Box<dyn Sampler>,
+    ray_sampler: fn(&mut Box<dyn Sampler>) -> Ray,
+    wavelength_sampler: fn(&mut Box<dyn Sampler>) -> f32,
+    iterations: usize,
+) -> (Vec<Input>, Vec<Option<Output>>) {
+    let mut inputs: Vec<Input> = Vec::new();
+    let mut outputs: Vec<Option<Output>> = Vec::new();
+    let mut failed = 0;
+    for _ in 0..iterations {
+        let input = Input {
+            ray: ray_sampler(sampler),
+            lambda: wavelength_sampler(sampler),
+        };
+        let output = evaluate(lenses, 0.0, input, 0);
+        inputs.push(input);
+        if output.is_err() {
+            failed += 1;
+        }
+        outputs.push(output.ok());
+    }
+    println!(
+        "simulated {} rays, {} rays failed to exit the lens assembly",
+        iterations, failed
+    );
+    (inputs, outputs)
+}
+
+fn main() -> std::io::Result<()> {
     println!("testing usage of new Vector3 as defined in nalgebra");
     let v1: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
     let v2: Vector3<f32> = Vector3::new(1.0, 1.0, 1.0);
     println!("{:?}", v1.dot(&v2));
 
-    let lines = "# whatever
-65.22    9.60  N-SSK8 1.5 50 24.0
--62.03   4.20  N-SF10 1.5 50 24.0
--1240.67 5.00  air           24.0
-100000  105.00  iris          20.0"
+    //     let lines = "# whatever
+    // 65.22    9.60  N-SSK8 1.5 50 24.0
+    // -62.03   4.20  N-SF10 1.5 50 24.0
+    // -1240.67 5.00  air           24.0
+    // 100000  105.00  iris          20.0"
+    //         .lines();
+    let lines = "164.12		10.99				SF5			1.673	32.2	54
+559.28		0.23				air							54
+100.12		11.45				BAF10		1.67	47.1    51
+213.54		0.23				air							51
+58.04		22.95				LAK9		1.691	54.7	41
+2551		2.58				SF5			1.673	32.2	41
+32.39		15.66				air							27
+10000		15.00				IRIS						25.5
+-40.42		2.74				SF15		1.699	30.1	25
+192.98		27.92				SK16		1.62	60.3	36
+-55.53		0.23				air							36
+192.98		7.98				LAK9		1.691	54.7	35
+-225.28		0.23				air							35
+175.1		8.48				LAK9		1.691	54.7	35
+-203.54		55.742				air							35"
         .lines();
     let mut lenses: Vec<LensElement> = Vec::new();
     let (mut last_ior, mut last_vno) = (1.0, 0.0);
@@ -36,25 +85,56 @@ fn main() {
         println!("successfully parsed lens {:?}", lens);
         lenses.push(lens);
     }
-    for _ in 0..100 {
-        let input: Input = Input {
-            ray: Ray::new(
-                Point3::ZERO + Vec3::new(random_between(-1.0, 1.0), random_between(-1.0, 1.0), 0.0),
-                Vec3::new(random_between(-1.0, 1.0), random_between(-1.0, 1.0), 3.0).normalized(),
-            ),
-            lambda: 0.450,
-        };
-        let res = evaluate(&lenses, 0.0, input, 0);
-        match res {
-            Ok(output) => {
-                println!(
-                    "ray on outer pupil, transmittance: {:?}, {}",
-                    output.ray, output.tau
-                );
-            }
-            Err(error) => {
-                print!("{} ", error);
-            }
+
+    let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+    // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+    let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+        let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+        let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+        Ray::new(
+            Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, 0.0),
+            Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+        )
+    };
+    let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+    let (inputs, outputs) = simulate(
+        &lenses,
+        &mut sampler,
+        ray_sampler,
+        wavelength_sampler,
+        1000000,
+    );
+
+    use std::io::{BufWriter, Seek, SeekFrom};
+    let mut file = BufWriter::new(File::create("output.txt")?);
+    for (input, output) in inputs.iter().zip(outputs.iter()) {
+        file.write(
+            format!(
+                "{} {} {} {} {}",
+                input.ray.origin.x(),
+                input.ray.origin.y(),
+                input.ray.direction.x(),
+                input.ray.direction.y(),
+                input.lambda
+            )
+            .as_bytes(),
+        );
+        if let Some(output) = output {
+            file.write(
+                format!(
+                    " {} {} {} {} {}\n",
+                    output.ray.origin.x(),
+                    output.ray.origin.y(),
+                    output.ray.direction.x(),
+                    output.ray.direction.y(),
+                    output.tau
+                )
+                .as_bytes(),
+            );
+        } else {
+            file.write(b" !\n");
         }
     }
+
+    Ok(())
 }
