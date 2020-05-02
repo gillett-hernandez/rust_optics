@@ -1,4 +1,8 @@
 #![allow(unused_imports, dead_code, unused_variables)]
+
+#[macro_use]
+extern crate packed_simd;
+
 mod lens;
 mod math;
 mod spectrum;
@@ -18,15 +22,41 @@ use std::fs::File;
 use std::io::prelude::*;
 
 #[allow(unused_mut)]
+fn construct_paperbased_sample(
+    last_lens: &LensElement,
+    zoom: f32,
+    mut sampler: &mut Box<dyn Sampler>,
+) -> Input<PlaneRay> {
+    let Sample2D { x, y } = sampler.draw_2d();
+    let Sample2D { x: u, y: v } = sampler.draw_2d();
+    let Sample1D { x: w } = sampler.draw_1d();
+    let theta = 2.0 * 3.1415926535 * u;
+    let (sin, cos) = theta.sin_cos();
+    let dist = last_lens.thickness_at(zoom);
+    let mut plane_ray = PlaneRay::new(
+        35.0 * (1.0 - x),
+        35.0 * (1.0 - y),
+        last_lens.radius / dist * cos * v.sqrt(),
+        last_lens.radius / dist * sin * v.sqrt(),
+    );
+    plane_ray.dx -= plane_ray.x / dist;
+    plane_ray.dy -= plane_ray.y / dist;
+    Input {
+        ray: plane_ray,
+        lambda: w * 0.3 + 0.4,
+    }
+}
+
+#[allow(unused_mut)]
 fn simulate(
     lenses: &Vec<LensElement>,
     mut sampler: &mut Box<dyn Sampler>,
-    ray_sampler: fn(&mut Box<dyn Sampler>) -> Ray,
+    ray_sampler: fn(&mut Box<dyn Sampler>) -> PlaneRay,
     wavelength_sampler: fn(&mut Box<dyn Sampler>) -> f32,
     iterations: usize,
-) -> (Vec<Input>, Vec<Option<Output>>) {
-    let mut inputs: Vec<Input> = Vec::new();
-    let mut outputs: Vec<Option<Output>> = Vec::new();
+) -> (Vec<Input<PlaneRay>>, Vec<Option<Output<SphereRay>>>) {
+    let mut inputs: Vec<Input<PlaneRay>> = Vec::new();
+    let mut outputs: Vec<Option<Output<SphereRay>>> = Vec::new();
     let mut failed = 0;
     for _ in 0..iterations {
         let input = Input {
@@ -85,19 +115,21 @@ fn main() -> std::io::Result<()> {
 
     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-    let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+    let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
         let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
         let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-        Ray::new(
-            Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
-            Vec3::new(x2 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+        PlaneRay::new(
+            35.0 * (1.0 - x1),
+            35.0 * (1.0 - y1),
+            (x2 * 2.0 - 1.0) / 5.0,
+            (y2 * 2.0 - 1.0) / 5.0,
         )
     };
     let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
     let (inputs, outputs) = simulate(
         &lenses,
         &mut sampler,
-        ray_sampler,
+        plane_ray_sampler,
         wavelength_sampler,
         1000000,
     );
@@ -136,19 +168,13 @@ fn main() -> std::io::Result<()> {
     let mut count = 10;
     for (input, output) in inputs.iter().zip(outputs.iter()) {
         if count > 0 {
-            print!(
-                "input {:?}, {:?}, {} ",
-                input.ray.origin, input.ray.direction, input.lambda,
-            );
+            print!("input {:?}, {} ", input.ray, input.lambda,);
             if let Some(out) = output {
-                let normal_ray = sphere_to_cs(out.ray, -lens0.radius, lens0.radius);
-                let (exterior_point, normal) =
-                    (normal_ray.origin, normal_ray.direction.normalized());
-                let ex = Vec3::new(normal.z(), 0.0, -normal.x()).normalized();
-                // normal is in world space, but out origin and direction are not.
-                let frame = TangentFrame::from_tangent_and_normal(ex, normal);
-                let o_dir = frame.to_world(&out.ray.direction);
-                println!(": output {:?}, {:?}, {}", exterior_point, o_dir, out.tau);
+                let ray = sphere_to_camera_space(out.ray, -lens0.radius, lens0.radius);
+                println!(
+                    ": output {:?}, {:?}, {}",
+                    ray.origin, ray.direction, out.tau
+                );
             } else {
                 println!("");
             }
@@ -157,31 +183,26 @@ fn main() -> std::io::Result<()> {
         file.write(
             format!(
                 "{} {} {} {} {}",
-                input.ray.origin.x(),
-                input.ray.origin.y(),
-                input.ray.direction.x(),
-                input.ray.direction.y(),
+                input.ray.x(),
+                input.ray.y(),
+                input.ray.dx(),
+                input.ray.dy(),
                 input.lambda
             )
             .as_bytes(),
         )?;
-        if let Some(output) = output {
-            let normal_ray = sphere_to_cs(output.ray, -lens0.radius, lens0.radius);
-            let (exterior_point, normal) = (normal_ray.origin, normal_ray.direction.normalized());
-            let ex = Vec3::new(normal.z(), 0.0, -normal.x()).normalized();
-            // normal is in world space, but output origin and direction are not.
-            let frame = TangentFrame::from_tangent_and_normal(ex, normal);
-            let o_dir = frame.to_world(&output.ray.direction);
+        if let Some(out) = output {
+            let ray = sphere_to_camera_space(out.ray, -lens0.radius, lens0.radius);
             file.write(
                 format!(
                     " {} {} {} {} {} {} {}\n",
-                    exterior_point.x(),
-                    exterior_point.y(),
-                    exterior_point.z(),
-                    o_dir.x(),
-                    o_dir.y(),
-                    o_dir.z(),
-                    output.tau
+                    ray.origin.x(),
+                    ray.origin.y(),
+                    ray.origin.z(),
+                    ray.direction.x(),
+                    ray.direction.y(),
+                    ray.direction.z(),
+                    out.tau
                 )
                 .as_bytes(),
             )?;
