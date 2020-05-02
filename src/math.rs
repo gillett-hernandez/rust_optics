@@ -358,59 +358,73 @@ impl TangentFrame {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Input {
-    pub ray: Ray,
+pub struct Input<T> {
+    pub ray: T,
     pub lambda: f32,
 }
 
-impl Input {
-    pub fn slice(&self) -> [f32; 5] {
-        [
-            self.ray.origin.x(),
-            self.ray.origin.y(),
-            self.ray.direction.x(),
-            self.ray.direction.y(),
-            self.lambda,
-        ]
+#[derive(Copy, Clone, Debug)]
+pub struct Output<T> {
+    pub ray: T,
+    pub tau: f32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct PlaneRay(pub f32x4);
+
+impl PlaneRay {
+    pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
+        Self {
+            0: f32x4::new(x, y, dx, dy),
+        }
+    }
+    pub fn x(&self) -> f32 {
+        self.0.extract(0)
+    }
+    pub fn y(&self) -> f32 {
+        self.0.extract(1)
+    }
+    pub fn dx(&self) -> f32 {
+        self.0.extract(2)
+    }
+    pub fn dy(&self) -> f32 {
+        self.0.extract(3)
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Output {
-    pub ray: Ray,
-    pub tau: f32,
-}
+pub struct SphereRay(pub f32x4);
 
-impl Output {
-    pub fn slice(&self) -> [f32; 5] {
-        [
-            self.ray.origin.x(),
-            self.ray.origin.y(),
-            self.ray.direction.x(),
-            self.ray.direction.y(),
-            self.tau,
-        ]
+impl SphereRay {
+    pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
+        Self {
+            0: f32x4::new(x, y, dx, dy),
+        }
+    }
+    pub fn x(&self) -> f32 {
+        self.0.extract(0)
+    }
+    pub fn y(&self) -> f32 {
+        self.0.extract(1)
+    }
+    pub fn dx(&self) -> f32 {
+        self.0.extract(2)
+    }
+    pub fn dy(&self) -> f32 {
+        self.0.extract(3)
     }
 }
 
-pub struct PlaneRay {
-    pub x: f32,
-    pub y: f32,
-    pub u: f32,
-    pub v: f32,
-}
-
-impl PlaneRay {
-    pub fn new(x: f32, y: f32, u: f32, v: f32) {
-        Self { x, y, u, v }
+impl From<SphereRay> for PlaneRay {
+    fn from(other: SphereRay) -> Self {
+        Self { 0: other.0 }
     }
 }
 
-pub struct SphereRay {
-    pub x: f32,
-    pub y: f32,
-    pub dx: f32,
-    pub dy: f32,
+impl From<PlaneRay> for SphereRay {
+    fn from(other: PlaneRay) -> Self {
+        Self { 0: other.0 }
+    }
 }
 
 #[derive(Debug)]
