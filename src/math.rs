@@ -393,6 +393,20 @@ impl Output {
     }
 }
 
+pub struct PlaneRay {
+    pub x: f32,
+    pub y: f32,
+    pub u: f32,
+    pub v: f32,
+}
+
+pub struct SphereRay {
+    pub x: f32,
+    pub y: f32,
+    pub dx: f32,
+    pub dy: f32,
+}
+
 #[derive(Debug)]
 pub struct Sample1D {
     pub x: f32,

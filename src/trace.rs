@@ -194,9 +194,13 @@ pub fn cs_to_plane(ray_in: Ray, plane_pos: f32) -> Ray {
     let [dx, dy, dz, _]: [f32; 4] = ray_in.direction.0.into();
     let t = (plane_pos - z) / dz;
     // TODO: double check that the z members of origin and direction should or should not be 0.0
+    // z + dz * t
+    // = z + dz * (plane_pos - z) / dz
+    // = z + plane_pos - z
+    // = plane_pos
     Ray::new(
-        Point3::new(x + t * dx, y + t * dy, z),
-        Vec3::new(dx / dz.abs(), dy / dz.abs(), dz),
+        Point3::new(x + t * dx, y + t * dy, plane_pos),
+        Vec3::new(dx / dz.abs(), dy / dz.abs(), 1.0),
     )
 }
 
@@ -229,10 +233,10 @@ pub fn cs_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> Ray 
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
     // TODO: determine if these `replace`s are correct or not. in the original c code, they were mutable parameters and the z components were unchanged.
     Ray::new(
-        ray_in.origin,
-        // Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
-        frame.to_local(&temp_direction),
-        // Vec3::from_raw(frame.to_local(&temp_direction).0.replace(2, 0.0)),
+        // ray_in.origin,
+        Point3::from_raw(ray_in.origin.0.replace(2, 0.0)),
+        // frame.to_local(&temp_direction),
+        Vec3::from_raw(frame.to_local(&temp_direction).0.replace(2, 0.0)),
     )
 }
 
@@ -504,7 +508,7 @@ mod test {
         Input {
             ray: Ray::new(
                 Point3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 0.0),
-                Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, 1.0).normalized(),
+                Vec3::new(random::<f32>() / 10.0, random::<f32>() / 10.0, -1.0).normalized(),
             ),
             lambda: 450.0,
         }
@@ -519,7 +523,7 @@ mod test {
     #[test]
     fn test_trace_spherical() {
         let input: Input = basic_input();
-        println!("testing trace spherical with given input");
+        println!("testing trace spherical with given input {:?}", input);
         let result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
         match result {
             Ok((ray, normal)) => {
@@ -574,28 +578,57 @@ mod test {
         };
     }
     #[test]
-    fn test_other_functions() {
+    fn test_space_functions() {
         let input: Input = basic_input();
+        println!("{:?}", input);
 
-        let trace_result = trace_spherical(input.ray, 0.9, 1.0, 0.9);
+        println!("testing camera space to plane space and back with given input");
+        let plane = cs_to_plane(input.ray, 0.0);
+        println!("{:?}", plane);
+
+        let new_ray = plane_to_cs(plane, 0.0);
+        println!("{:?}", new_ray);
+
+        assert!((input.ray.origin - new_ray.origin).norm() < 0.000001);
+        assert!((input.ray.direction - new_ray.direction).norm() < 0.000001);
+
+        println!(
+            "testing camera space to sphere space and back with given input {:?}",
+            input.ray
+        );
+        let sphere = cs_to_sphere(input.ray, -1.0, 1.0);
+        println!("{:?}", sphere);
+        let new_ray = sphere_to_cs(sphere, -1.0, 1.0);
+        println!("{:?}", new_ray);
+
+        // looser tolerances because the ray origin gets projected onto the sphere.
+        assert!((input.ray.origin - new_ray.origin).norm() < 0.1);
+        println!("{}", (input.ray.direction - new_ray.direction).norm());
+        assert!((input.ray.direction - new_ray.direction).norm() < 0.001);
+    }
+
+    #[test]
+    fn test_refract_and_fresnel() {
+        // basic input is a vector near the origin, with z component 0, pointing nearly straight downward (negative Z-ward)
+        let input: Input = basic_input();
+        println!("{:?}", input);
+        let mut trace_result = trace_spherical(input.ray, 40.0, -42.0, 30.0).unwrap();
+
+        let normal = trace_result.1;
+        let cos_r = normal * input.ray.direction;
+
+        let result = refract(1.0, 1.45, normal, input.ray.direction);
+        println!("{:?}", result);
+
+        trace_result.0.direction = result.0;
+
+        let cos_i = normal * trace_result.0.direction;
+
+        println!("{:?}, {:?}, {}, {}", input, trace_result, cos_r, cos_i);
+
         println!("testing fresnel with given input");
-        let result = fresnel(1.0, 1.45, 0.3, 0.6);
+        let result = fresnel(1.0, 1.45, cos_i, cos_r);
         println!("{}", result);
-        println!("testing refract with given input");
-        let result = refract(1.0, 1.45, trace_result.unwrap().1, input.ray.direction);
-        println!("{:?}", result);
-        println!("testing plane_to_cs with given input");
-        let result = plane_to_cs(input.ray, 2.0);
-        println!("{:?}", result);
-        println!("testing cs_to_plane with given input");
-        let result = cs_to_plane(input.ray, 2.0);
-        println!("{:?}", result);
-        println!("testing sphere_to_cs with given input");
-        let result = sphere_to_cs(input.ray, 2.0, 1.0);
-        println!("{:?}", result);
-        println!("testing cs_to_sphere with given input");
-        let result = cs_to_sphere(input.ray, 2.0, 1.0);
-        println!("{:?}", result);
     }
 
     fn construct_lenses() -> Vec<LensElement> {
@@ -700,8 +733,8 @@ mod test {
             let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
             let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
             Ray::new(
-                Point3::ZERO + Vec3::new(2.0 * x1 - 1.0, 2.0 * y1 - 1.0, -100.0),
-                Vec3::new(x1 * 2.0 - 1.0, y2 * 2.0 - 1.0, 7.0).normalized(),
+                Point3::ZERO + Vec3::new((2.0 * x1 - 1.0) / 2.0, (2.0 * y1 - 1.0) / 2.0, 0.0),
+                Vec3::new((x1 * 2.0 - 1.0) / 2.0, (y2 * 2.0 - 1.0) / 2.0, 7.0).normalized(),
             )
         };
         let wavelength_sampler =
@@ -713,8 +746,13 @@ mod test {
 
         let maybe_output = evaluate_reverse(&lenses, 0.0, input, 0);
         println!("{:?}", input);
-        if let Ok(output) = maybe_output {
-            println!("{:?}", output);
+        match maybe_output {
+            Ok(output) => {
+                println!("{:?}", output);
+            }
+            Err(e) => {
+                println!("{}", e);
+            }
         }
     }
 }
