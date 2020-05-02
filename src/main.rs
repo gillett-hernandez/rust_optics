@@ -33,14 +33,14 @@ fn construct_paperbased_sample(
     let theta = 2.0 * 3.1415926535 * u;
     let (sin, cos) = theta.sin_cos();
     let dist = last_lens.thickness_at(zoom);
+    let x = 35.0 * (1.0 - x);
+    let y = 35.0 * (1.0 - y);
     let mut plane_ray = PlaneRay::new(
-        35.0 * (1.0 - x),
-        35.0 * (1.0 - y),
-        last_lens.radius / dist * cos * v.sqrt(),
-        last_lens.radius / dist * sin * v.sqrt(),
+        x,
+        y,
+        last_lens.radius / dist * cos * v.sqrt() - x / dist,
+        last_lens.radius / dist * sin * v.sqrt() - y / dist,
     );
-    plane_ray.dx -= plane_ray.x / dist;
-    plane_ray.dy -= plane_ray.y / dist;
     Input {
         ray: plane_ray,
         lambda: w * 0.3 + 0.4,

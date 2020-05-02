@@ -799,7 +799,11 @@ mod test {
         //     |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
         let mut succeeded = false;
         for _ in 0..100 {
-            let input = basic_sphere_input();
+            // let input = basic_sphere_input();
+            let input = Input {
+                ray: SphereRay::new(0.0, 0.0, 0.0, 0.0),
+                lambda: 0.45,
+            };
 
             let maybe_output = evaluate_aperture_reverse(&lenses, 0.0, input, 0);
             println!("{:?}", input);
