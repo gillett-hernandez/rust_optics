@@ -24,7 +24,6 @@ use std::io::prelude::*;
 fn simulate_phase1(
     lenses: &Vec<LensElement>,
     inputs: &Vec<Input<PlaneRay>>,
-    iterations: usize,
 ) -> Vec<Option<Output<SphereRay>>> {
     let mut outputs: Vec<Option<Output<SphereRay>>> = Vec::new();
     let mut failed = 0;
@@ -37,7 +36,8 @@ fn simulate_phase1(
     }
     println!(
         "simulated {} rays, {} rays failed to exit the lens assembly",
-        iterations, failed
+        inputs.len(),
+        failed
     );
     outputs
 }
@@ -45,7 +45,6 @@ fn simulate_phase1(
 fn simulate_phase2(
     lenses: &Vec<LensElement>,
     inputs: &Vec<Input<PlaneRay>>,
-    iterations: usize,
 ) -> Vec<Option<Output<PlaneRay>>> {
     let mut outputs: Vec<Option<Output<PlaneRay>>> = Vec::new();
     let mut failed = 0;
@@ -58,7 +57,8 @@ fn simulate_phase2(
     }
     println!(
         "simulated {} rays, {} rays failed to exit the lens assembly",
-        iterations, failed
+        inputs.len(),
+        failed
     );
     outputs
 }
@@ -124,8 +124,8 @@ fn main() -> std::io::Result<()> {
     let wavelength_sampler = |sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
     let mut inputs: Vec<Input<PlaneRay>> = Vec::new();
-    let w = 100;
-    let h = 100;
+    let w = 1000;
+    let h = 1000;
     for y in 0..h {
         for x in 0..w {
             let ray = plane_ray_sampler(x as f32 / w as f32, y as f32 / h as f32, &mut sampler);
@@ -134,8 +134,8 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let outputs1 = simulate_phase1(&lenses, &inputs, 1000000);
-    let outputs2 = simulate_phase2(&lenses, &inputs, 1000000);
+    let outputs1 = simulate_phase1(&lenses, &inputs);
+    let outputs2 = simulate_phase2(&lenses, &inputs);
 
     use std::io::BufWriter;
     let mut file1 = BufWriter::new(File::create("output1.txt")?);
