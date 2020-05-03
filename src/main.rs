@@ -21,24 +21,15 @@ pub use na::{Matrix3, Vector3};
 use std::fs::File;
 use std::io::prelude::*;
 
-#[allow(unused_mut)]
 fn simulate_phase1(
     lenses: &Vec<LensElement>,
-    mut sampler: &mut Box<dyn Sampler>,
-    ray_sampler: impl Fn(&mut Box<dyn Sampler>) -> PlaneRay,
-    wavelength_sampler: impl Fn(&mut Box<dyn Sampler>) -> f32,
+    inputs: &Vec<Input<PlaneRay>>,
     iterations: usize,
-) -> (Vec<Input<PlaneRay>>, Vec<Option<Output<SphereRay>>>) {
-    let mut inputs: Vec<Input<PlaneRay>> = Vec::new();
+) -> Vec<Option<Output<SphereRay>>> {
     let mut outputs: Vec<Option<Output<SphereRay>>> = Vec::new();
     let mut failed = 0;
-    for _ in 0..iterations {
-        let input = Input {
-            ray: ray_sampler(sampler),
-            lambda: wavelength_sampler(sampler),
-        };
+    for input in inputs {
         let output = evaluate(lenses, 0.0, input, 0);
-        inputs.push(input);
         if output.is_err() {
             failed += 1;
         }
@@ -48,8 +39,30 @@ fn simulate_phase1(
         "simulated {} rays, {} rays failed to exit the lens assembly",
         iterations, failed
     );
-    (inputs, outputs)
+    outputs
 }
+
+fn simulate_phase2(
+    lenses: &Vec<LensElement>,
+    inputs: &Vec<Input<PlaneRay>>,
+    iterations: usize,
+) -> Vec<Option<Output<PlaneRay>>> {
+    let mut outputs: Vec<Option<Output<PlaneRay>>> = Vec::new();
+    let mut failed = 0;
+    for input in inputs {
+        let output = evaluate_aperture(lenses, 0.0, input, 0);
+        if output.is_err() {
+            failed += 1;
+        }
+        outputs.push(output.ok());
+    }
+    println!(
+        "simulated {} rays, {} rays failed to exit the lens assembly",
+        iterations, failed
+    );
+    outputs
+}
+
 #[allow(unused_mut)]
 fn main() -> std::io::Result<()> {
     //     let lines = "# whatever
@@ -89,23 +102,11 @@ fn main() -> std::io::Result<()> {
 
     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-    // let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
-    //     let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
-    //     let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-    //     let (sin, cos) = (2.0 * 3.14159265358979 * x2).sin_cos();
-    //     let (x, y) = (35.0 * (1.0 - x1), 35.0 * (1.0 - y1));
-    //     PlaneRay::new(
-    //         x,
-    //         y,
-    //         10.0 / 108.5 * cos * y2.sqrt() - x / 108.5,
-    //         10.0 / 108.5 * sin * y2.sqrt() - y / 108.5,
-    //     )
-    // };
+    const ZOOM: f32 = 0.0;
 
-    let dist = LensElement::total_thickness_at(lenses.as_slice(), 0.0);
+    let dist = LensElement::total_thickness_at(lenses.as_slice(), ZOOM);
     println!("total lens thickness is {}", dist);
-    let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
-        let Sample2D { x, y } = sampler.draw_2d();
+    let plane_ray_sampler = |x: f32, y: f32, sampler: &mut Box<dyn Sampler>| {
         let Sample2D { x: u, y: v } = sampler.draw_2d();
         let theta = 2.0 * 3.1415926535 * u;
         let (sin, cos) = theta.sin_cos();
@@ -122,47 +123,26 @@ fn main() -> std::io::Result<()> {
     };
     let wavelength_sampler = |sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
-    let (inputs, outputs) = simulate_phase1(
-        &lenses,
-        &mut sampler,
-        plane_ray_sampler,
-        wavelength_sampler,
-        1000000,
-    );
+    let mut inputs: Vec<Input<PlaneRay>> = Vec::new();
+    let w = 100;
+    let h = 100;
+    for y in 0..h {
+        for x in 0..w {
+            let ray = plane_ray_sampler(x as f32 / w as f32, y as f32 / h as f32, &mut sampler);
+            let lambda = wavelength_sampler(&mut sampler);
+            inputs.push(Input { ray, lambda });
+        }
+    }
+
+    let outputs1 = simulate_phase1(&lenses, &inputs, 1000000);
+    let outputs2 = simulate_phase2(&lenses, &inputs, 1000000);
 
     use std::io::BufWriter;
-    let mut file = BufWriter::new(File::create("output.txt")?);
-    // for (input, output) in inputs.iter().zip(outputs.iter()) {
-    //     file.write(
-    //         format!(
-    //             "{} {} {} {} {}",
-    //             input.ray.origin.x(),
-    //             input.ray.origin.y(),
-    //             input.ray.direction.x(),
-    //             input.ray.direction.y(),
-    //             input.lambda
-    //         )
-    //         .as_bytes(),
-    //     );
-    //     if let Some(output) = output {
-    //         file.write(
-    //             format!(
-    //                 " {} {} {} {} {}\n",
-    //                 output.ray.origin.x(),
-    //                 output.ray.origin.y(),
-    //                 output.ray.direction.x(),
-    //                 output.ray.direction.y(),
-    //                 output.tau
-    //             )
-    //             .as_bytes(),
-    //         );
-    //     } else {
-    //         file.write(b" !\n");
-    //     }
-    // }
+    let mut file1 = BufWriter::new(File::create("output1.txt")?);
+    let mut file2 = BufWriter::new(File::create("output2.txt")?);
     let lens0: LensElement = lenses[0];
     let mut count = 10;
-    for (input, output) in inputs.iter().zip(outputs.iter()) {
+    for (input, output) in inputs.iter().zip(outputs1.iter()) {
         if count > 0 {
             print!("input {:?}, {} ", input.ray, input.lambda,);
             if let Some(out) = output {
@@ -176,7 +156,7 @@ fn main() -> std::io::Result<()> {
             }
             count -= 1;
         }
-        file.write(
+        file1.write(
             format!(
                 "{} {} {} {} {}",
                 input.ray.x(),
@@ -188,22 +168,63 @@ fn main() -> std::io::Result<()> {
             .as_bytes(),
         )?;
         if let Some(out) = output {
-            let ray = sphere_to_camera_space(out.ray, -lens0.radius, lens0.radius);
-            file.write(
+            // let ray = sphere_to_camera_space(out.ray, -lens0.radius, lens0.radius);
+            file1.write(
                 format!(
-                    " {} {} {} {} {} {} {}\n",
-                    ray.origin.x(),
-                    ray.origin.y(),
-                    ray.origin.z(),
-                    ray.direction.x(),
-                    ray.direction.y(),
-                    ray.direction.z(),
+                    " {} {} {} {} {}\n",
+                    out.ray.x(),
+                    out.ray.y(),
+                    out.ray.dx(),
+                    out.ray.dy(),
                     out.tau
                 )
                 .as_bytes(),
             )?;
         } else {
-            file.write(b" !\n")?;
+            file1.write(b" !\n")?;
+        }
+    }
+    let mut count = 10;
+    let aperture_pos = LensElement::aperture_position(lenses.as_slice(), ZOOM);
+    for (input, output) in inputs.iter().zip(outputs2.iter()) {
+        if count > 0 {
+            print!("input {:?}, {} ", input.ray, input.lambda,);
+            if let Some(out) = output {
+                let ray = plane_to_camera_space(out.ray, aperture_pos);
+                println!(
+                    ": output {:?}, {:?}, {}",
+                    ray.origin, ray.direction, out.tau
+                );
+            } else {
+                println!("");
+            }
+            count -= 1;
+        }
+        file2.write(
+            format!(
+                "{} {} {} {} {}",
+                input.ray.x(),
+                input.ray.y(),
+                input.ray.dx(),
+                input.ray.dy(),
+                input.lambda
+            )
+            .as_bytes(),
+        )?;
+        if let Some(out) = output {
+            file2.write(
+                format!(
+                    " {} {} {} {} {}\n",
+                    out.ray.x(),
+                    out.ray.y(),
+                    out.ray.dx(),
+                    out.ray.dy(),
+                    out.tau
+                )
+                .as_bytes(),
+            )?;
+        } else {
+            file2.write(b" !\n")?;
         }
     }
 

@@ -237,7 +237,7 @@ pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f3
 pub fn evaluate(
     lenses: &Vec<LensElement>,
     zoom: f32,
-    input: Input<PlaneRay>,
+    input: &Input<PlaneRay>,
     aspheric: i16,
 ) -> Result<Output<SphereRay>, i32> {
     assert!(lenses.len() > 0);
@@ -301,7 +301,7 @@ pub fn evaluate(
 pub fn evaluate_reverse(
     lenses: &Vec<LensElement>,
     zoom: f32,
-    input: Input<SphereRay>,
+    input: &Input<SphereRay>,
     aspheric: i16,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
@@ -358,7 +358,7 @@ pub fn evaluate_reverse(
 pub fn evaluate_aperture(
     lenses: &Vec<LensElement>,
     zoom: f32,
-    input: Input<PlaneRay>,
+    input: &Input<PlaneRay>,
     aspheric: i16,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
@@ -425,7 +425,7 @@ pub fn evaluate_aperture(
 pub fn evaluate_aperture_reverse(
     lenses: &Vec<LensElement>,
     zoom: f32,
-    input: Input<SphereRay>,
+    input: &Input<SphereRay>,
     aspheric: i16,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
