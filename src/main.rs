@@ -115,20 +115,20 @@ fn main() -> std::io::Result<()> {
 
     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-    let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
-        let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
-        let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-        let (sin, cos) = (2.0 * 3.14159265358979 * x2).sin_cos();
-        let (x, y) = (35.0 * (1.0 - x1), 35.0 * (1.0 - y1));
-        PlaneRay::new(
-            x,
-            y,
-            10.0 / 108.5 * cos * y2.sqrt() - x / 108.5,
-            10.0 / 108.5 * sin * y2.sqrt() - y / 108.5,
-        )
-    };
-    // let plane_ray_sampler =
-    //     |mut sampler| construct_paperbased_sample(lenses2.last().unwrap(), 0.0, sampler).ray;
+    // let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+    //     let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+    //     let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+    //     let (sin, cos) = (2.0 * 3.14159265358979 * x2).sin_cos();
+    //     let (x, y) = (35.0 * (1.0 - x1), 35.0 * (1.0 - y1));
+    //     PlaneRay::new(
+    //         x,
+    //         y,
+    //         10.0 / 108.5 * cos * y2.sqrt() - x / 108.5,
+    //         10.0 / 108.5 * sin * y2.sqrt() - y / 108.5,
+    //     )
+    // };
+    let plane_ray_sampler =
+        |mut sampler| construct_paperbased_sample(lenses2.last().unwrap(), 0.0, sampler).ray;
     let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
     let (inputs, outputs) = simulate(
