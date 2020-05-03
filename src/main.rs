@@ -128,8 +128,8 @@ fn main() -> std::io::Result<()> {
     //     )
     // };
     let plane_ray_sampler =
-        |mut sampler| construct_paperbased_sample(lenses2.last().unwrap(), 0.0, sampler).ray;
-    let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+        |sampler: &mut Box<dyn Sampler>| construct_paperbased_sample(lenses.last().unwrap(), 0.0, sampler).ray;
+    let wavelength_sampler = |sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
     let (inputs, outputs) = simulate(
         &lenses,
