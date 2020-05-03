@@ -22,33 +22,7 @@ use std::fs::File;
 use std::io::prelude::*;
 
 #[allow(unused_mut)]
-fn construct_paperbased_sample(
-    last_lens: &LensElement,
-    zoom: f32,
-    mut sampler: &mut Box<dyn Sampler>,
-) -> Input<PlaneRay> {
-    let Sample2D { x, y } = sampler.draw_2d();
-    let Sample2D { x: u, y: v } = sampler.draw_2d();
-    let Sample1D { x: w } = sampler.draw_1d();
-    let theta = 2.0 * 3.1415926535 * u;
-    let (sin, cos) = theta.sin_cos();
-    let dist = last_lens.thickness_at(zoom);
-    let x = 35.0 * (1.0 - x);
-    let y = 35.0 * (1.0 - y);
-    let mut plane_ray = PlaneRay::new(
-        x,
-        y,
-        last_lens.radius / dist * cos * v.sqrt() - x / dist,
-        last_lens.radius / dist * sin * v.sqrt() - y / dist,
-    );
-    Input {
-        ray: plane_ray,
-        lambda: w * 0.3 + 0.4,
-    }
-}
-
-#[allow(unused_mut)]
-fn simulate(
+fn simulate_phase1(
     lenses: &Vec<LensElement>,
     mut sampler: &mut Box<dyn Sampler>,
     ray_sampler: impl Fn(&mut Box<dyn Sampler>) -> PlaneRay,
@@ -127,11 +101,28 @@ fn main() -> std::io::Result<()> {
     //         10.0 / 108.5 * sin * y2.sqrt() - y / 108.5,
     //     )
     // };
-    let plane_ray_sampler =
-        |sampler: &mut Box<dyn Sampler>| construct_paperbased_sample(lenses.last().unwrap(), 0.0, sampler).ray;
+
+    let dist = LensElement::total_thickness_at(lenses.as_slice(), 0.0);
+    println!("total lens thickness is {}", dist);
+    let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+        let Sample2D { x, y } = sampler.draw_2d();
+        let Sample2D { x: u, y: v } = sampler.draw_2d();
+        let theta = 2.0 * 3.1415926535 * u;
+        let (sin, cos) = theta.sin_cos();
+        let R = lenses.last().unwrap().housing_radius;
+        let x = 35.0 * (x - 0.5);
+        let y = 35.0 * (y - 0.5);
+        let mut plane_ray = PlaneRay::new(
+            x,
+            y,
+            R / dist * cos * v.sqrt() - x / dist,
+            R / dist * sin * v.sqrt() - y / dist,
+        );
+        plane_ray
+    };
     let wavelength_sampler = |sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
-    let (inputs, outputs) = simulate(
+    let (inputs, outputs) = simulate_phase1(
         &lenses,
         &mut sampler,
         plane_ray_sampler,

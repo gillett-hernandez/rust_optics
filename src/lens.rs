@@ -45,7 +45,7 @@ impl LensElement {
         }
         0.0
     }
-    pub fn aperture_pos(slice: &[Self], zoom: f32) -> f32 {
+    pub fn aperture_position(slice: &[Self], zoom: f32) -> f32 {
         let mut pos = 0.0;
         for elem in slice {
             if elem.lens_type == LensType::Aperture {
@@ -55,6 +55,14 @@ impl LensElement {
         }
         pos
     }
+    pub fn total_thickness_at(slice: &[Self], zoom: f32) -> f32 {
+        let mut pos = 0.0;
+        for elem in slice {
+            pos += elem.thickness_at(zoom);
+        }
+        pos
+    }
+
     pub fn parse_from(string: &str, default_ior: f32, default_vno: f32) -> Result<Self, &str> {
         // format is:
         // lens := radius thickness_short(/thickness_mid(/thickness_long)?)? (anamorphic)? (mtl_name|'air'|'iris') ior vno housing_radius ('#!aspheric='aspheric_correction)?
