@@ -51,8 +51,8 @@ fn construct_paperbased_sample(
 fn simulate(
     lenses: &Vec<LensElement>,
     mut sampler: &mut Box<dyn Sampler>,
-    ray_sampler: fn(&mut Box<dyn Sampler>) -> PlaneRay,
-    wavelength_sampler: fn(&mut Box<dyn Sampler>) -> f32,
+    ray_sampler: impl Fn(&mut Box<dyn Sampler>) -> PlaneRay,
+    wavelength_sampler: impl Fn(&mut Box<dyn Sampler>) -> f32,
     iterations: usize,
 ) -> (Vec<Input<PlaneRay>>, Vec<Option<Output<SphereRay>>>) {
     let mut inputs: Vec<Input<PlaneRay>> = Vec::new();
@@ -127,9 +127,8 @@ fn main() -> std::io::Result<()> {
             10.0 / 108.5 * sin * y2.sqrt() - y / 108.5,
         )
     };
-    // let plane_ray_sampler2 = |mut sampler| {
-    //     construct_paperbased_sample(lenses2.last().unwrap(), 0.0, sampler).ray
-    // };
+    // let plane_ray_sampler =
+    //     |mut sampler| construct_paperbased_sample(lenses2.last().unwrap(), 0.0, sampler).ray;
     let wavelength_sampler = |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
 
     let (inputs, outputs) = simulate(
