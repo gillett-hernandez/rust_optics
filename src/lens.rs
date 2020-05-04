@@ -181,7 +181,6 @@ mod test {
     #[test]
     fn test_parse() {
         let test_string = "65.22 9.60  N-SSK8 1.5 50 24.0";
-        // LensElement::parse_from(test_string);
         let lens = LensElement::parse_from(test_string, 1.0, 0.0);
         println!("{:?}", lens);
     }

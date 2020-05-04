@@ -69,9 +69,10 @@ pub fn evaluate_aspherical_derivative(pos: Point3, r: f32, k: i32, correction: f
     let h7 = h4 * h3;
     let h9 = h6 * h3;
     let corv = f32x4::new(4.0 * h3, 6.0 * h5, 8.0 * h7, 10.0 * h9);
-    let subexpr = (1.0 - (1.0 + k as f32) * hr * hr).max(0.0).sqrt();
+    let hr2 = hr * hr;
+    let subexpr = (1.0 - (1.0 + k as f32) * hr2).max(0.0).sqrt();
     2.0 * hr / (1.0 + subexpr)
-        + hr * hr * hr * (k as f32 + 1.0) / (subexpr * (subexpr + 1.0).powf(2.0))
+        + hr2 * hr * (k as f32 + 1.0) / (subexpr * (subexpr + 1.0).powf(2.0))
         + (correction * corv).sum()
 }
 
