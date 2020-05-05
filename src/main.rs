@@ -4,11 +4,13 @@
 extern crate packed_simd;
 
 mod lens;
+mod lightfield;
 mod math;
 mod spectrum;
 mod trace;
 
 use lens::*;
+use lightfield::*;
 use math::*;
 use trace::*;
 
@@ -24,11 +26,12 @@ use std::io::prelude::*;
 fn simulate_phase1(
     lenses: &Vec<LensElement>,
     inputs: &Vec<Input<PlaneRay>>,
+    zoom: f32,
 ) -> Vec<Option<Output<SphereRay>>> {
     let mut outputs: Vec<Option<Output<SphereRay>>> = Vec::new();
     let mut failed = 0;
     for input in inputs {
-        let output = evaluate(lenses, 0.0, input, 0);
+        let output = evaluate(lenses, zoom, input, 0);
         if output.is_err() {
             failed += 1;
         }
@@ -45,11 +48,12 @@ fn simulate_phase1(
 fn simulate_phase2(
     lenses: &Vec<LensElement>,
     inputs: &Vec<Input<PlaneRay>>,
+    zoom: f32,
 ) -> Vec<Option<Output<PlaneRay>>> {
     let mut outputs: Vec<Option<Output<PlaneRay>>> = Vec::new();
     let mut failed = 0;
     for input in inputs {
-        let output = evaluate_aperture(lenses, 0.0, input, 0);
+        let output = evaluate_aperture(lenses, zoom, input, 0);
         if output.is_err() {
             failed += 1;
         }
@@ -61,6 +65,38 @@ fn simulate_phase2(
         failed
     );
     outputs
+}
+
+fn sample_aperture(
+    lenses: &Vec<LensElement>,
+    sensor_sample: Input<PlaneRay>,
+    zoom: f32,
+    mut sampler: &mut Box<dyn Sampler>,
+    aperture_sample_fn: impl Fn(&mut Box<dyn Sampler>) -> (f32, f32),
+    p_a: FittedLightField<PlaneRay>,
+    // p_o: FittedLightField<SphereRay>,
+) -> Option<Output<SphereRay>> {
+    let [sx, sy, _, _]: [f32; 4] = sensor_sample.ray.0.into();
+    let (tx, ty) = aperture_sample_fn(&mut sampler);
+    let lambda = sensor_sample.lambda;
+    let (mut dx, mut dy) = (0.0, 0.0);
+    for _ in 0..100 {
+        let input = Input {
+            ray: PlaneRay::new(sx, sy, dx, dy),
+            lambda,
+        };
+        // usually this would be the evaluation of the light field, not an `evaluate_aperture` call
+        let estimated_aperture_sample = evaluate_aperture(&lenses, zoom, &input, 0);
+        let out_ray = match estimated_aperture_sample {
+            Ok(Output { ray, tau: _ }) => ray,
+            Err(i) => {
+                return None;
+            }
+        };
+        let error = (tx - out_ray.x(), ty - out_ray.y());
+        // somehow compute jacobian, to determine what the derivatives are, for the pseudo newtons method
+    }
+    None
 }
 
 #[allow(unused_mut)]
@@ -134,8 +170,8 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let outputs1 = simulate_phase1(&lenses, &inputs);
-    let outputs2 = simulate_phase2(&lenses, &inputs);
+    let outputs1 = simulate_phase1(&lenses, &inputs, ZOOM);
+    let outputs2 = simulate_phase2(&lenses, &inputs, ZOOM);
 
     use std::io::BufWriter;
     let mut file1 = BufWriter::new(File::create("output1.txt")?);
