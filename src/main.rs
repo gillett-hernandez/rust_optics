@@ -3,10 +3,10 @@
 #[macro_use]
 extern crate packed_simd;
 
-mod lens;
-mod math;
-mod spectrum;
-mod trace;
+pub mod lens;
+pub mod math;
+pub mod spectrum;
+pub mod trace;
 
 use lens::*;
 use math::*;
