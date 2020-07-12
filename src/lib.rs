@@ -8,9 +8,9 @@ pub mod math;
 pub mod spectrum;
 pub mod trace;
 
-use lens::*;
+pub use lens::*;
 use math::*;
-use trace::*;
+pub use trace::*;
 
 use packed_simd::f32x4;
 use rand::prelude::*;
@@ -64,7 +64,7 @@ fn simulate_phase2(
 }
 
 #[allow(unused_mut)]
-fn main() -> std::io::Result<()> {
+fn test() -> std::io::Result<()> {
     //     let lines = "# whatever
     // 65.22    9.60  N-SSK8 1.5 50 24.0
     // -62.03   4.20  N-SF10 1.5 50 24.0
