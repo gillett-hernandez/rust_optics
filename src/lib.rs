@@ -10,6 +10,7 @@ pub mod trace;
 
 pub use lens::*;
 use math::*;
+pub use math::{Input, Output, PlaneRay, SphereRay};
 pub use trace::*;
 
 use packed_simd::f32x4;
@@ -63,6 +64,23 @@ fn simulate_phase2(
     outputs
 }
 
+pub fn parse_lenses_from(spec: &str) -> (Vec<LensElement>, f32, f32) {
+    let lines = spec.lines();
+    let mut lenses: Vec<LensElement> = Vec::new();
+    let (mut last_ior, mut last_vno) = (1.0, 0.0);
+    for line in lines {
+        if line.starts_with("#") {
+            continue;
+        }
+        let lens = LensElement::parse_from(line, last_ior, last_vno).unwrap();
+        last_ior = lens.ior;
+        last_vno = lens.vno;
+        // println!("successfully parsed lens {:?}", lens);
+        lenses.push(lens);
+    }
+    (lenses, last_ior, last_vno)
+}
+
 #[allow(unused_mut)]
 fn test() -> std::io::Result<()> {
     //     let lines = "# whatever
@@ -71,7 +89,7 @@ fn test() -> std::io::Result<()> {
     // -1240.67 5.00  air           24.0
     // 100000  105.00  iris          20.0"
     //         .lines();
-    let lines = "164.12		10.99				SF5			1.673	32.2	54
+    let spec = "164.12		10.99				SF5			1.673	32.2	54
 559.28		0.23				air							54
 100.12		11.45				BAF10		1.67	47.1    51
 213.54		0.23				air							51
@@ -85,20 +103,8 @@ fn test() -> std::io::Result<()> {
 192.98		7.98				LAK9		1.691	54.7	35
 -225.28		0.23				air							35
 175.1		8.48				LAK9		1.691	54.7	35
--203.54		55.742				air							35"
-        .lines();
-    let mut lenses: Vec<LensElement> = Vec::new();
-    let (mut last_ior, mut last_vno) = (1.0, 0.0);
-    for line in lines {
-        if line.starts_with("#") {
-            continue;
-        }
-        let lens = LensElement::parse_from(line, last_ior, last_vno).unwrap();
-        last_ior = lens.ior;
-        last_vno = lens.vno;
-        println!("successfully parsed lens {:?}", lens);
-        lenses.push(lens);
-    }
+-203.54		55.742				air							35";
+    let (lenses, last_ior, last_vno) = parse_lenses_from(spec);
 
     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
