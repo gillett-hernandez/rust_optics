@@ -38,14 +38,22 @@ impl LensElement {
         }
     }
     pub fn aperture_radius(slice: &[Self]) -> f32 {
+        let aperture_index = LensElement::aperture_index(slice);
+        slice[aperture_index].housing_radius
+    }
+    pub fn aperture_index(slice: &[Self]) -> usize {
+        // returns last index if slice does not contain an aperture
+        let mut i = 0;
         for elem in slice {
             if elem.lens_type == LensType::Aperture {
-                return elem.housing_radius;
+                return i;
             }
+            i += 1;
         }
-        0.0
+        i - 1
     }
     pub fn aperture_position(slice: &[Self], zoom: f32) -> f32 {
+        // returns the end if there is no aperture
         let mut pos = 0.0;
         for elem in slice {
             if elem.lens_type == LensType::Aperture {
