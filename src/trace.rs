@@ -236,10 +236,11 @@ pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f3
 
 // traces rays from the sensor to the outer pupil
 pub fn evaluate(
-    lenses: &Vec<LensElement>,
+    lenses: &[LensElement],
     zoom: f32,
     input: &Input<PlaneRay>,
     aspheric: i16,
+    atmosphere_ior: f32,
 ) -> Result<Output<SphereRay>, i32> {
     assert!(lenses.len() > 0);
     let mut error = 0;
@@ -276,7 +277,7 @@ pub fn evaluate(
         let n2 = if k > 0 {
             spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
         } else {
-            1.0
+            atmosphere_ior
         };
         // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
         let res = refract(n1, n2, normal, ray.direction);
@@ -300,19 +301,20 @@ pub fn evaluate(
 
 // evaluate scene to sensor
 pub fn evaluate_reverse(
-    lenses: &Vec<LensElement>,
+    lenses: &[LensElement],
     zoom: f32,
     input: &Input<SphereRay>,
     aspheric: i16,
+    atmosphere_ior: f32,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
     let mut error = 0;
-    let mut n1 = 1.0;
+    let mut n1 = atmosphere_ior;
     let mut ray: Ray;
     let mut intensity = 1.0;
-    ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
+    ray = sphere_to_camera_space(input.ray, -lenses[0].radius, lenses[0].radius);
     let mut distsum = 0.0;
-    ray.direction = -ray.direction;
+    ray.direction = ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
         let r = lens.radius;
         let dist = lens.thickness_at(zoom);
@@ -357,10 +359,11 @@ pub fn evaluate_reverse(
 
 // traces rays from the sensor to aperture
 pub fn evaluate_aperture(
-    lenses: &Vec<LensElement>,
+    lenses: &[LensElement],
     zoom: f32,
     input: &Input<PlaneRay>,
     aspheric: i16,
+    atmosphere_ior: f32,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
     let mut error = 0;
@@ -400,7 +403,7 @@ pub fn evaluate_aperture(
         let n2 = if k > 0 {
             spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
         } else {
-            1.0
+            atmosphere_ior
         };
         // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
         let res = refract(n1, n2, normal, ray.direction);
@@ -424,19 +427,20 @@ pub fn evaluate_aperture(
 
 // evaluate scene to aperture
 pub fn evaluate_aperture_reverse(
-    lenses: &Vec<LensElement>,
+    lenses: &[LensElement],
     zoom: f32,
     input: &Input<SphereRay>,
     aspheric: i16,
+    atmosphere_ior: f32,
 ) -> Result<Output<PlaneRay>, i32> {
     assert!(lenses.len() > 0);
     let mut error = 0;
-    let mut n1 = 1.0;
+    let mut n1 = atmosphere_ior;
     let mut ray: Ray;
     let mut intensity = 1.0;
     ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
     let mut distsum = 0.0;
-    ray.direction = -ray.direction;
+    ray.direction = ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
         let r = lens.radius;
         let dist = lens.thickness_at(zoom);
@@ -461,7 +465,7 @@ pub fn evaluate_aperture_reverse(
         let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
         // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
         let res = refract(n1, n2, normal, ray.direction);
-        ray.direction = res.0;
+        ray.direction = res.0.normalized();
         intensity *= res.1;
         if intensity < INTENSITY_EPS {
             error |= 8;
@@ -469,8 +473,6 @@ pub fn evaluate_aperture_reverse(
         if error > 0 {
             return Err(error);
         }
-        // not sure why this normalize is here.
-        ray.direction = ray.direction.normalized();
         distsum += dist;
         if lens.lens_type == LensType::Aperture {
             break;
@@ -499,8 +501,8 @@ mod test {
     }
     fn random_incoming_ray() -> Ray {
         Ray::new(
-            Point3::new(0.1, 0.1, 0.0),
-            Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, -10.0).normalized(),
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, -100.0).normalized(),
         )
     }
 
@@ -516,10 +518,10 @@ mod test {
         }
     }
 
-    fn basic_sphere_input() -> Input<SphereRay> {
+    fn basic_sphere_input(radius: f32) -> Input<SphereRay> {
         let incoming = random_incoming_ray();
         Input {
-            ray: camera_space_to_sphere(incoming, -10.0, 10.0),
+            ray: camera_space_to_sphere(incoming, -radius, radius),
             lambda: 0.45,
         }
     }
@@ -533,7 +535,7 @@ mod test {
     #[test]
     fn test_sphere_input() {
         println!("testing construction of input");
-        let input = basic_sphere_input();
+        let input = basic_sphere_input(100.0);
         println!("{:?}", input);
     }
     #[test]
@@ -610,7 +612,7 @@ mod test {
     }
     #[test]
     fn test_sphere_space() {
-        let incoming = basic_sphere_input();
+        let incoming = basic_sphere_input(10.0);
         println!("{:?}", incoming);
 
         let new_ray = sphere_to_camera_space(incoming.ray, 0.0, 1.0);
@@ -682,15 +684,23 @@ mod test {
 
         let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
         // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-        let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
-            let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
-            let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-            PlaneRay::new(
-                35.0 * (1.0 - x1),
-                35.0 * (1.0 - y1),
-                (x2 * 2.0 - 1.0) / 5.0,
-                (y2 * 2.0 - 1.0) / 5.0,
-            )
+        let dist = lenses.last().unwrap().thickness_at(0.0);
+        println!("total lens thickness is {}", dist);
+        let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x, y } = sampler.draw_2d();
+            let Sample2D { x: u, y: v } = sampler.draw_2d();
+            let theta = 2.0 * 3.1415926535 * u;
+            let (sin, cos) = theta.sin_cos();
+            let housing_radius = lenses.last().unwrap().housing_radius;
+            let x = 35.0 * (x - 0.5);
+            let y = 35.0 * (y - 0.5);
+            let mut plane_ray = PlaneRay::new(
+                x,
+                y,
+                housing_radius / dist * cos * v.sqrt() - x / dist,
+                housing_radius / dist * sin * v.sqrt() - y / dist,
+            );
+            plane_ray
         };
         let wavelength_sampler =
             |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
@@ -701,7 +711,7 @@ mod test {
                 lambda: wavelength_sampler(&mut sampler),
             };
 
-            let maybe_output = evaluate(&lenses, 0.0, input, 0);
+            let maybe_output = evaluate(&lenses, 0.0, &input, 0, 1.0);
             println!("{:?}", input);
             if let Ok(output) = maybe_output {
                 println!("{:?}", output);
@@ -717,15 +727,23 @@ mod test {
 
         let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
         // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-        let plane_ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
-            let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
-            let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-            PlaneRay::new(
-                35.0 * (1.0 - x1),
-                35.0 * (1.0 - x1),
-                (x2 * 2.0 - 1.0) / 5.0,
-                (y2 * 2.0 - 1.0) / 5.0,
-            )
+        let dist = lenses.last().unwrap().thickness_at(0.0);
+        println!("total lens thickness is {}", dist);
+        let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x, y } = sampler.draw_2d();
+            let Sample2D { x: u, y: v } = sampler.draw_2d();
+            let theta = 2.0 * 3.1415926535 * u;
+            let (sin, cos) = theta.sin_cos();
+            let housing_radius = lenses.last().unwrap().housing_radius;
+            let x = 35.0 * (x - 0.5);
+            let y = 35.0 * (y - 0.5);
+            let plane_ray = PlaneRay::new(
+                x,
+                y,
+                housing_radius / dist * cos * v.sqrt() - x / dist,
+                housing_radius / dist * sin * v.sqrt() - y / dist,
+            );
+            plane_ray
         };
         let wavelength_sampler =
             |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
@@ -736,7 +754,7 @@ mod test {
                 lambda: wavelength_sampler(&mut sampler),
             };
 
-            let maybe_output = evaluate_aperture(&lenses, 0.0, input, 0);
+            let maybe_output = evaluate_aperture(&lenses, 0.0, &input, 0, 1.0);
             println!("{:?}", input);
             if let Ok(output) = maybe_output {
                 println!("{:?}", output);
@@ -764,19 +782,19 @@ mod test {
         // let wavelength_sampler =
         //     |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
         let mut succeeded = false;
-        for _ in 0..100 {
-            let input = basic_sphere_input();
+        for _ in 0..10000 {
+            let input = basic_sphere_input(lenses[0].radius);
 
-            let maybe_output = evaluate_reverse(&lenses, 0.0, input, 0);
-            println!("{:?}", input);
+            let maybe_output = evaluate_reverse(&lenses, 0.0, &input, 0, 1.0);
             match maybe_output {
                 Ok(output) => {
+                    println!("{:?}", input);
                     println!("{:?}", output);
                     succeeded = true;
                     break;
                 }
                 Err(e) => {
-                    println!("{}", e);
+                    print!("{}", e);
                 }
             }
         }
@@ -799,23 +817,19 @@ mod test {
         // let wavelength_sampler =
         //     |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
         let mut succeeded = false;
-        for _ in 0..100 {
-            // let input = basic_sphere_input();
-            let input = Input {
-                ray: SphereRay::new(0.0, 0.0, 0.0, 0.0),
-                lambda: 0.45,
-            };
+        for _ in 0..10000 {
+            let input = basic_sphere_input(lenses[0].radius);
 
-            let maybe_output = evaluate_aperture_reverse(&lenses, 0.0, input, 0);
-            println!("{:?}", input);
+            let maybe_output = evaluate_aperture_reverse(&lenses, 0.0, &input, 0, 1.0);
             match maybe_output {
                 Ok(output) => {
+                    println!("{:?}", input);
                     println!("{:?}", output);
                     succeeded = true;
                     break;
                 }
                 Err(e) => {
-                    println!("{}", e);
+                    print!("{}", e);
                 }
             }
         }
