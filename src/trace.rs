@@ -294,7 +294,7 @@ pub fn evaluate(
         n1 = n2;
     }
     Ok(Output {
-        ray: camera_space_to_sphere(ray, distsum - lenses[0].radius, lenses[0].radius),
+        ray: camera_space_to_sphere(ray, distsum - lenses[0].radius.abs(), lenses[0].radius),
         tau: intensity,
     })
 }
@@ -312,9 +312,9 @@ pub fn evaluate_reverse(
     let mut n1 = atmosphere_ior;
     let mut ray: Ray;
     let mut intensity = 1.0;
-    ray = sphere_to_camera_space(input.ray, -lenses[0].radius, lenses[0].radius);
+    ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
     let mut distsum = 0.0;
-    ray.direction = ray.direction;
+    ray.direction = -ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
         let r = lens.radius;
         let dist = lens.thickness_at(zoom);
@@ -769,33 +769,50 @@ mod test {
     fn test_evaluate_reverse() {
         let lenses = construct_lenses();
 
-        // let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
-        // // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
-        // let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
-        //     let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
-        //     let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
-        //     Ray::new(
-        //         Point3::ZERO + Vec3::new((2.0 * x1 - 1.0) / 2.0, (2.0 * y1 - 1.0) / 2.0, 0.0),
-        //         Vec3::new((x1 * 2.0 - 1.0) / 2.0, (y2 * 2.0 - 1.0) / 2.0, 7.0).normalized(),
-        //     )
-        // };
-        // let wavelength_sampler =
-        //     |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+        let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+        // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+        let dist = lenses.last().unwrap().thickness_at(0.0);
+        let first = lenses.first().unwrap();
+        println!("total lens thickness is {}", dist);
+
+        let position_span = 100.0;
+        let direction_span = 10.0;
+
+        let sphere_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+            let Sample2D { x, y } = sampler.draw_2d();
+            let Sample2D { x: u, y: v } = sampler.draw_2d();
+            // let theta = 2.0 * 3.1415926535 * u;
+            let theta: f32 = if u > 0.5 { 0.0 } else { 3.1415926535 };
+            let v_sqrt = v.sqrt();
+            let (sin, cos) = theta.sin_cos();
+            let incoming = Ray::new(
+                Point3::new((x - 0.5) * position_span, (y - 0.5) * position_span, 0.0),
+                Vec3::new(
+                    direction_span * cos * v_sqrt,
+                    direction_span * sin * v_sqrt,
+                    -100.0,
+                )
+                .normalized(),
+            );
+            println!("incoming ray {:?}", incoming);
+
+            camera_space_to_sphere(incoming, -first.radius, first.radius)
+        };
+        let wavelength_sampler =
+            |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
         let mut succeeded = false;
-        for _ in 0..10000 {
-            let input = basic_sphere_input(lenses[0].radius);
+        for _ in 0..100 {
+            let input = Input {
+                ray: sphere_ray_sampler(&mut sampler),
+                lambda: wavelength_sampler(&mut sampler),
+            };
 
             let maybe_output = evaluate_reverse(&lenses, 0.0, &input, 0, 1.0);
-            match maybe_output {
-                Ok(output) => {
-                    println!("{:?}", input);
-                    println!("{:?}", output);
-                    succeeded = true;
-                    break;
-                }
-                Err(e) => {
-                    print!("{}", e);
-                }
+
+            if let Ok(output) = maybe_output {
+                println!("{:?}", output);
+                succeeded = true;
+                break;
             }
         }
         assert!(succeeded);
