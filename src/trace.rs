@@ -312,7 +312,7 @@ pub fn evaluate_reverse(
     let mut n1 = atmosphere_ior;
     let mut ray: Ray;
     let mut intensity = 1.0;
-    ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
+    ray = sphere_to_camera_space(input.ray, -lenses[0].radius, lenses[0].radius);
     let mut distsum = 0.0;
     ray.direction = -ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
@@ -438,7 +438,7 @@ pub fn evaluate_aperture_reverse(
     let mut n1 = atmosphere_ior;
     let mut ray: Ray;
     let mut intensity = 1.0;
-    ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
+    ray = sphere_to_camera_space(input.ray, lenses[0].radius, lenses[0].radius);
     let mut distsum = 0.0;
     ray.direction = -ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
