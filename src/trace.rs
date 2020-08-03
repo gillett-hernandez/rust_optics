@@ -320,18 +320,18 @@ pub fn evaluate_reverse(
         let dist = lens.thickness_at(zoom);
         let res: (Ray, Vec3);
         if lens.anamorphic {
-            res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
+            res = trace_cylindrical(ray, r, distsum - r, lens.housing_radius)?;
         } else if aspheric > 0 {
             res = trace_aspherical(
                 ray,
                 r,
-                distsum + r,
+                distsum - r,
                 lens.aspheric,
                 lens.correction,
                 lens.housing_radius,
             )?;
         } else {
-            res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
+            res = trace_spherical(ray, r, distsum - r, lens.housing_radius)?;
         }
         ray = res.0;
         let normal = res.1;
@@ -348,7 +348,7 @@ pub fn evaluate_reverse(
         }
         // not sure why this normalize is here.
         ray.direction = ray.direction.normalized();
-        distsum += dist;
+        distsum -= dist;
         n1 = n2;
     }
     Ok(Output {
@@ -440,25 +440,25 @@ pub fn evaluate_aperture_reverse(
     let mut intensity = 1.0;
     ray = sphere_to_camera_space(input.ray, 0.0, lenses[0].radius);
     let mut distsum = 0.0;
-    ray.direction = ray.direction;
+    ray.direction = -ray.direction;
     for (_k, lens) in lenses.iter().enumerate() {
         let r = lens.radius;
         let dist = lens.thickness_at(zoom);
         let normal;
         let res: (Ray, Vec3);
         if lens.anamorphic {
-            res = trace_cylindrical(ray, r, distsum + r, lens.housing_radius)?;
+            res = trace_cylindrical(ray, r, distsum - r, lens.housing_radius)?;
         } else if aspheric > 0 {
             res = trace_aspherical(
                 ray,
                 r,
-                distsum + r,
+                distsum - r,
                 lens.aspheric,
                 lens.correction,
                 lens.housing_radius,
             )?;
         } else {
-            res = trace_spherical(ray, r, distsum + r, lens.housing_radius)?;
+            res = trace_spherical(ray, r, distsum - r, lens.housing_radius)?;
         }
         ray = res.0;
         normal = res.1;
@@ -473,7 +473,7 @@ pub fn evaluate_aperture_reverse(
         if error > 0 {
             return Err(error);
         }
-        distsum += dist;
+        distsum -= dist;
         if lens.lens_type == LensType::Aperture {
             break;
         }
