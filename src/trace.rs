@@ -252,7 +252,8 @@ pub fn evaluate(
     let mut ray: Ray;
     let mut intensity = 1.0;
     ray = plane_to_camera_space(input.ray, 0.0);
-    let mut distsum = 0.0;
+    let total_thickness = LensElement::total_thickness_at(lenses, zoom);
+    let mut distsum = -total_thickness;
     for (k, lens) in lenses.iter().rev().enumerate() {
         let r = -lens.radius;
         let dist = lens.thickness_at(zoom);
@@ -294,7 +295,7 @@ pub fn evaluate(
         n1 = n2;
     }
     Ok(Output {
-        ray: camera_space_to_sphere(ray, distsum - lenses[0].radius.abs(), lenses[0].radius),
+        ray: camera_space_to_sphere(ray, -lenses[0].radius, lenses[0].radius),
         tau: intensity,
     })
 }
@@ -375,7 +376,8 @@ pub fn evaluate_aperture(
     let mut ray: Ray;
     let mut intensity = 1.0;
     ray = plane_to_camera_space(input.ray, 0.0);
-    let mut distsum = 0.0;
+    let total_thickness = LensElement::total_thickness_at(lenses, zoom);
+    let mut distsum = -total_thickness;
     for (k, lens) in lenses.iter().rev().enumerate() {
         let r = -lens.radius;
         let dist = lens.thickness_at(zoom);
