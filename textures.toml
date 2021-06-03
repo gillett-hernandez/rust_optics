@@ -1,0 +1,24 @@
+
+[[textures]]
+name = "lambertian_texture"
+[[textures.texture_stack]]
+type = "Texture4"
+filename = "data/textures/texture_test.png"
+[[textures.texture_stack.curves]]
+type = "TabulatedCSV"
+filename = "data/curves/basis/simple-spectral-srgb-1931.csv"
+column = 1
+interpolation_mode = "Cubic"
+[[textures.texture_stack.curves]]
+type = "TabulatedCSV"
+filename = "data/curves/basis/simple-spectral-srgb-1931.csv"
+column = 2
+interpolation_mode = "Cubic"
+[[textures.texture_stack.curves]]
+type = "TabulatedCSV"
+filename = "data/curves/basis/simple-spectral-srgb-1931.csv"
+column = 3
+interpolation_mode = "Cubic"
+[[textures.texture_stack.curves]]
+type = "Flat"
+strength = 0.0

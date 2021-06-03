@@ -1,17 +1,21 @@
+use std::f32::{
+    consts::{SQRT_2, TAU},
+    EPSILON,
+};
+
 #[allow(unused_imports)]
-
-use lens::*;
-use lib::*;
-
-use math::XYZColor;
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
-
 use packed_simd::f32x4;
 use rand::prelude::*;
-use random::random_cosine_direction;
 use rayon::prelude::*;
 
-use spectral::BOUNDED_VISIBLE_RANGE;
+use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
+use film::Film;
+use lens_sampler::RadialSampler;
+use lib::*;
+use parse::*;
+
+use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 use tonemap::{sRGB, Tonemapper};
 
 fn main() {
@@ -197,7 +201,7 @@ fn main() {
     let direction_cache_radius_bins = 128;
     let direction_cache_wavelength_bins = 128;
 
-    let mut direction_cache_film = recalculate_and_cache_directions(
+    let mut direction_cache = RadialSampler::new(
         SQRT_2 * sensor_size / 2.0, // diagonal.
         direction_cache_radius_bins,
         direction_cache_wavelength_bins,
@@ -207,6 +211,9 @@ fn main() {
         lens_zoom,
         |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
         heat_bias,
+        sensor_size,
+        width,
+        height,
     );
 
     let mut last_pressed_hotkey = Key::A;
@@ -434,7 +441,7 @@ fn main() {
                 .for_each(|e| *e = XYZColor::BLACK)
         }
         if clear_direction_cache {
-            direction_cache_film = recalculate_and_cache_directions(
+            direction_cache = RadialSampler::new(
                 SQRT_2 * sensor_size / 2.0, // diagonal.
                 direction_cache_radius_bins,
                 direction_cache_wavelength_bins,
@@ -444,7 +451,10 @@ fn main() {
                 lens_zoom,
                 |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
                 heat_bias,
-            )
+                sensor_size,
+                width,
+                height,
+            );
         }
 
         let srgb_tonemapper = sRGB::new(&film, 1.0);
@@ -506,6 +516,7 @@ fn main() {
             .par_iter_mut()
             .enumerate()
             .map(|(i, pixel)| {
+                let mut sampler = RandomSampler::new();
                 let px = i % width;
                 let py = i / width;
 
@@ -518,90 +529,27 @@ fn main() {
                     film_position,
                 );
                 for _ in 0..samples_per_iteration {
-                    let [mut x, mut y, z, _]: [f32; 4] = central_point.0.into();
-                    x += (random::<f32>() - 0.5) / width as f32 * sensor_size;
-                    y += (random::<f32>() - 0.5) / height as f32 * sensor_size;
-
-                    let rotation_angle = y.atan2(x);
-
-                    let film_radius = y.hypot(x);
-
-                    let u = film_radius / (SQRT_2 * sensor_size / 2.0);
-                    let v = ((lambda - wavelength_bounds.lower) / wavelength_bounds.span())
-                        .clamp(0.0, 1.0 - EPSILON);
-                    debug_assert!(u < 1.0 && v < 1.0, "{}, {}", u, v);
-                    let d_x_idx = (u * direction_cache_radius_bins as f32) as usize;
-                    let d_y_idx = (v * direction_cache_wavelength_bins as f32) as usize;
-                    let angles00 = direction_cache_film.at(d_x_idx, d_y_idx);
-                    let angles01 = if d_y_idx + 1 < direction_cache_wavelength_bins {
-                        direction_cache_film.at(d_x_idx, d_y_idx + 1)
-                    } else {
-                        angles00
-                    };
-                    let angles10 = if d_x_idx + 1 < direction_cache_radius_bins {
-                        direction_cache_film.at(d_x_idx + 1, d_y_idx)
-                    } else {
-                        angles00
-                    };
-                    let angles11 = if d_x_idx + 1 < direction_cache_radius_bins
-                        && d_y_idx + 1 < direction_cache_wavelength_bins
-                    {
-                        direction_cache_film.at(d_x_idx + 1, d_y_idx + 1)
-                    } else {
-                        angles00
-                    };
-                    // do bilinear interpolation?
-                    let (du, dv) = (
-                        u - d_x_idx as f32 / direction_cache_radius_bins as f32,
-                        u - d_y_idx as f32 / direction_cache_wavelength_bins as f32,
-                    );
-
-                    // let (phi, dphi) = (angles00.extract(0), angles00.extract(1));
-
-                    // direct lookup through uv
-                    // let [phi, dphi, _, _]: [f32; 4] = direction_cache_film.at_uv((u, v)).into();
-
-                    // bilinear interpolation
-                    let (phi, dphi) = (
-                        (1.0 - du) * (1.0 - dv) * angles00.extract(0)
-                            + du * (1.0 - dv) * angles01.extract(0)
-                            + dv * (1.0 - du) * angles10.extract(0)
-                            + du * dv * angles11.extract(0),
-                        (1.0 - du) * (1.0 - dv) * angles00.extract(1)
-                            + du * (1.0 - dv) * angles01.extract(1)
-                            + dv * (1.0 - du) * angles10.extract(1)
-                            + du * dv * angles11.extract(1),
-                    );
-
-                    // direction is pointing towards the center somewhat and assumes direction.y() == 0.0
-                    // thus rotate to match actual central point of ray.
-
-                    let dx = -phi.sin();
-                    let direction = Vec3::from_raw(f32x4::new(
-                        dx * rotation_angle.cos(),
-                        dx * rotation_angle.sin(),
-                        phi.cos(),
-                        0.0,
-                    ));
-                    let radius = dphi * 1.01;
-
-                    // choose direction somehow
-
-                    let s2d = Sample2D::new_random_sample();
                     let v;
+                    let s0 = sampler.draw_2d();
+                    let [mut x, mut y, z, _]: [f32; 4] = central_point.0.into();
+                    x += (s0.x - 0.5) / width as f32 * sensor_size;
+                    y += (s0.y - 0.5) / height as f32 * sensor_size;
+
+                    let point = Point3::new(x, y, z);
                     if true {
                         // using lens symmetry sampler
-                        let frame =
-                            TangentFrame::from_normal(Vec3::from_raw(direction.0.replace(3, 0.0)));
-                        let phi = random::<f32>() * TAU;
-                        let r = s2d.x.sqrt() * radius;
-                        let unnormalized_v = Vec3::Z + Vec3::new(r * phi.cos(), r * phi.sin(), 0.0);
-                        v = frame.to_world(&unnormalized_v.normalized());
+
+                        v = direction_cache.sample(
+                            lambda,
+                            point,
+                            sampler.draw_2d(),
+                            sampler.draw_1d(),
+                        );
                     } else {
                         // random cosine sampling
-                        v = random_cosine_direction(s2d);
+                        v = random_cosine_direction(sampler.draw_2d());
                     }
-                    let ray = Ray::new(Point3::new(x, y, z), v.normalized());
+                    let ray = Ray::new(point, v);
 
                     attempts += 1;
                     // do actual tracing through lens for film sample
@@ -648,9 +596,9 @@ fn main() {
                             }
                             Mode::Direction => {
                                 *pixel = XYZColor::new(
-                                    (1.0 + direction.x()) * (1.0 + direction.w()),
-                                    (1.0 + direction.y()) * (1.0 + direction.w()),
-                                    (1.0 + direction.z()) * (1.0 + direction.w()),
+                                    (1.0 + v.x()) * (1.0 + v.w()),
+                                    (1.0 + v.y()) * (1.0 + v.w()),
+                                    (1.0 + v.z()) * (1.0 + v.w()),
                                 );
                             }
                         };

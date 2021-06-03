@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 itertools = "0.10.0"
+image = "0.23.12"
 rayon = "1.3.0"
 num_cpus = "1.13.0"
 toml = "0.5"
@@ -15,10 +16,15 @@ packed_simd = { version = "0.3.4", package = "packed_simd_2" }
 nalgebra = "0.27.0"
 minifb = "0.19.3"
 math =  { git = "https://github.com/gillett-hernandez/rust_cg_math" }
+exr = "0.9.0"
 
 [build-dependencies]
 serde = { version = "1.0.106", features = ["derive"] }
 serde_json = "1.0.52"
+
+[lib]
+name = "lib"
+path = "src/lib.rs"
 
 [profile.dev]
 opt-level = 3

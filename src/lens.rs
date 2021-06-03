@@ -2,7 +2,14 @@ use packed_simd::f32x4;
 
 use std::cmp::PartialEq;
 
-use crate::{Point3, Ray, TangentFrame, Vec3};
+pub use crate::math::f32x4_ZERO;
+pub use crate::math::{
+    Input, Output, PlaneRay, Point3, RandomSampler, Ray, Sample1D, Sample2D, Sample3D, Sampler,
+    SphereRay, StratifiedSampler, TangentFrame, Vec3,
+};
+use rand::random;
+
+const INTENSITY_EPS: f32 = 0.0001;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LensType {
@@ -388,8 +395,6 @@ pub fn spectrum_eta_from_abbe_num(nd: f32, vd: f32, lambda: f32) -> f32 {
     a + b / (lambda * lambda)
 }
 
-const INTENSITY_EPS: f32 = 0.0001;
-
 pub fn trace_spherical(
     ray: Ray,
     r: f32,
@@ -568,64 +573,6 @@ pub fn refract(n1: f32, n2: f32, normal: Vec3, dir: Vec3) -> (Vec3, f32) {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct PlaneRay(pub f32x4);
-
-impl PlaneRay {
-    pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self {
-            0: f32x4::new(x, y, dx, dy),
-        }
-    }
-    pub fn x(&self) -> f32 {
-        self.0.extract(0)
-    }
-    pub fn y(&self) -> f32 {
-        self.0.extract(1)
-    }
-    pub fn dx(&self) -> f32 {
-        self.0.extract(2)
-    }
-    pub fn dy(&self) -> f32 {
-        self.0.extract(3)
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct SphereRay(pub f32x4);
-
-impl SphereRay {
-    pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self {
-            0: f32x4::new(x, y, dx, dy),
-        }
-    }
-    pub fn x(&self) -> f32 {
-        self.0.extract(0)
-    }
-    pub fn y(&self) -> f32 {
-        self.0.extract(1)
-    }
-    pub fn dx(&self) -> f32 {
-        self.0.extract(2)
-    }
-    pub fn dy(&self) -> f32 {
-        self.0.extract(3)
-    }
-}
-
-impl From<SphereRay> for PlaneRay {
-    fn from(other: SphereRay) -> Self {
-        Self { 0: other.0 }
-    }
-}
-
-impl From<PlaneRay> for SphereRay {
-    fn from(other: PlaneRay) -> Self {
-        Self { 0: other.0 }
-    }
-}
-
 pub fn plane_to_camera_space(ray_in: PlaneRay, plane_pos: f32) -> Ray {
     let [x, y, dx, dy]: [f32; 4] = ray_in.0.into();
     Ray::new(
@@ -696,6 +643,7 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
 
 #[cfg(test)]
 mod test {
+
     use super::*;
     #[test]
     fn test_parse() {
@@ -735,15 +683,368 @@ mod test {
 
         println!("{:?}", output);
     }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
     #[test]
-    fn test_parse() {
-        let test_string = "65.22 9.60  N-SSK8 1.5 50 24.0";
-        let lens = LensElement::parse_from(test_string, 1.0, 0.0);
-        println!("{:?}", lens);
+    fn test_old_vec3() {
+        println!("testing usage of old Vec3");
+        let av1 = Vec3::new(1.0, 1.0, 1.0);
+        let av2 = Vec3::new(1.0, 1.0, 1.0);
+        println!("{:?}", av1 * av2);
     }
+
+    fn basic_incoming_ray() -> Ray {
+        Ray::new(Point3::new(0.1, 0.1, 0.0), -Vec3::Z)
+    }
+    fn random_incoming_ray() -> Ray {
+        Ray::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, -100.0).normalized(),
+        )
+    }
+
+    fn basic_plane_input() -> Input<PlaneRay> {
+        Input {
+            ray: PlaneRay::new(
+                35.0 * (random::<f32>() - 0.5),
+                35.0 * (random::<f32>() - 0.5),
+                random::<f32>() / 10.0,
+                random::<f32>() / 10.0,
+            ),
+            lambda: 0.45,
+        }
+    }
+
+    fn basic_sphere_input(radius: f32) -> Input<SphereRay> {
+        let incoming = random_incoming_ray();
+        Input {
+            ray: camera_space_to_sphere(incoming, -radius, radius),
+            lambda: 0.45,
+        }
+    }
+
+    #[test]
+    fn test_plane_input() {
+        println!("testing construction of input");
+        let input = basic_plane_input();
+        println!("{:?}", input);
+    }
+    #[test]
+    fn test_sphere_input() {
+        println!("testing construction of input");
+        let input = basic_sphere_input(100.0);
+        println!("{:?}", input);
+    }
+    #[test]
+    fn test_trace_spherical() {
+        let incoming = basic_incoming_ray();
+        println!("testing trace spherical with given input {:?}", incoming);
+        let result = trace_spherical(incoming, 0.9, -1.0, 0.9);
+        match result {
+            Ok((new_ray, normal)) => {
+                println!("{:?}, {:?}", new_ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+    }
+    #[test]
+    fn test_evaluate_aspherical() {
+        let incoming_ray = basic_incoming_ray();
+        println!("testing evaluate aspherical with given incoming_ray");
+        let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, f32x4_ZERO);
+        println!("{}", result);
+    }
+    #[test]
+    fn test_evaluate_aspherical_derivative() {
+        let incoming_ray = basic_incoming_ray();
+        println!("testing evaluate aspherical_derivative with given incoming_ray");
+        let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, f32x4_ZERO);
+        println!("{}", result);
+    }
+    #[test]
+    fn test_trace_aspherical() {
+        let incoming = basic_incoming_ray();
+
+        println!("testing trace aspherical with given input");
+        let result = trace_aspherical(incoming, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
+        match result {
+            Ok((ray, normal)) => {
+                println!("{:?}, {:?}", ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+    }
+    #[test]
+    fn test_trace_cylindrical() {
+        let incoming = basic_incoming_ray();
+        println!("testing trace cylindrical with given input");
+        let trace_result = trace_cylindrical(incoming, 0.9, 1.0, 0.9);
+        match trace_result {
+            Ok((ray, normal)) => {
+                println!("{:?}, {:?}", ray, normal);
+            }
+            Err(error) => {
+                println!("error occurred with code {}", error);
+            }
+        };
+    }
+    #[test]
+    fn test_plane_space() {
+        let incoming = basic_incoming_ray();
+        println!("{:?}", incoming);
+
+        println!("testing camera space to plane space and back with given ray");
+        let plane = camera_space_to_plane(incoming, 0.0);
+        println!("{:?}", plane);
+
+        let new_ray = plane_to_camera_space(plane, 0.0);
+        println!("{:?}", new_ray);
+
+        assert!((incoming.origin - new_ray.origin).norm() < 0.00001);
+        // assert!((incoming.direction - new_ray.direction).norm() < 0.00001);
+    }
+    #[test]
+    fn test_sphere_space() {
+        let incoming = basic_sphere_input(10.0);
+        println!("{:?}", incoming);
+
+        let new_ray = sphere_to_camera_space(incoming.ray, 0.0, 1.0);
+        println!("{:?}", new_ray);
+        let sphere = camera_space_to_sphere(new_ray, 0.0, 1.0);
+        println!("{:?}", sphere);
+        assert!((sphere.0 - incoming.ray.0).abs().sum() < 0.000001);
+    }
+
+    #[test]
+    fn test_refract_and_fresnel() {
+        // basic input is a vector near the origin, with z component 0, pointing nearly straight downward (negative Z-ward)
+        let input = basic_incoming_ray();
+        println!("{:?}", input);
+        let mut trace_result = trace_spherical(input, 40.0, -42.0, 30.0).unwrap();
+
+        let normal = trace_result.1;
+        let cos_r = normal * input.direction;
+
+        let result = refract(1.0, 1.45, normal, input.direction);
+        println!("{:?}", result);
+
+        trace_result.0.direction = result.0;
+
+        let cos_i = normal * trace_result.0.direction;
+
+        println!("{:?}, {:?}, {}, {}", input, trace_result, cos_r, cos_i);
+
+        println!("testing fresnel with given input");
+        let result = fresnel(1.0, 1.45, cos_i, cos_r);
+        println!("{}", result);
+    }
+
+    fn construct_lenses() -> Vec<LensInterface> {
+        let lines = "164.12		10.99				SF5			1.673	32.2	54
+559.28		0.23				air							54
+100.12		11.45				BAF10		1.67	47.1    51
+213.54		0.23				air							51
+58.04		22.95				LAK9		1.691	54.7	41
+2551		2.58				SF5			1.673	32.2	41
+32.39		15.66				air							27
+10000		15.00				IRIS						25.5
+-40.42		2.74				SF15		1.699	30.1	25
+192.98		27.92				SK16		1.62	60.3	36
+-55.53		0.23				air							36
+192.98		7.98				LAK9		1.691	54.7	35
+-225.28		0.23				air							35
+175.1		8.48				LAK9		1.691	54.7	35
+-203.54		55.742				air							35"
+            .lines();
+        let mut lenses: Vec<LensInterface> = Vec::new();
+        let (mut last_ior, mut last_vno) = (1.0, 0.0);
+        for line in lines {
+            if line.starts_with("#") {
+                continue;
+            }
+            let lens = LensInterface::parse_from(line, last_ior, last_vno).unwrap();
+            last_ior = lens.ior;
+            last_vno = lens.vno;
+            println!("successfully parsed lens {:?}", lens);
+            lenses.push(lens);
+        }
+        lenses
+    }
+    // #[allow(unused_mut)]
+    // #[test]
+    // fn test_evaluate() {
+    //     let lenses = construct_lenses();
+
+    //     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+    //     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+    //     let dist = lenses.last().unwrap().thickness_at(0.0);
+    //     println!("total lens thickness is {}", dist);
+    //     let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+    //         let Sample2D { x, y } = sampler.draw_2d();
+    //         let Sample2D { x: u, y: v } = sampler.draw_2d();
+    //         let theta = 2.0 * 3.1415926535 * u;
+    //         let (sin, cos) = theta.sin_cos();
+    //         let housing_radius = lenses.last().unwrap().housing_radius;
+    //         let x = 35.0 * (x - 0.5);
+    //         let y = 35.0 * (y - 0.5);
+    //         let mut plane_ray = PlaneRay::new(
+    //             x,
+    //             y,
+    //             housing_radius / dist * cos * v.sqrt() - x / dist,
+    //             housing_radius / dist * sin * v.sqrt() - y / dist,
+    //         );
+    //         plane_ray
+    //     };
+    //     let wavelength_sampler =
+    //         |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+    //     let mut succeeded = false;
+    //     for _ in 0..100 {
+    //         let input = Input {
+    //             ray: plane_ray_sampler(&mut sampler),
+    //             lambda: wavelength_sampler(&mut sampler),
+    //         };
+
+    //         let maybe_output = evaluate(&lenses, 0.0, &input, 0, 1.0);
+    //         println!("{:?}", input);
+    //         if let Ok(output) = maybe_output {
+    //             println!("{:?}", output);
+    //             succeeded = true;
+    //             break;
+    //         }
+    //     }
+    //     assert!(succeeded);
+    // }
+    // #[test]
+    // fn test_evaluate_aperture() {
+    //     let lenses = construct_lenses();
+
+    //     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+    //     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+    //     let dist = lenses.last().unwrap().thickness_at(0.0);
+    //     println!("total lens thickness is {}", dist);
+    //     let plane_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+    //         let Sample2D { x, y } = sampler.draw_2d();
+    //         let Sample2D { x: u, y: v } = sampler.draw_2d();
+    //         let theta = 2.0 * 3.1415926535 * u;
+    //         let (sin, cos) = theta.sin_cos();
+    //         let housing_radius = lenses.last().unwrap().housing_radius;
+    //         let x = 35.0 * (x - 0.5);
+    //         let y = 35.0 * (y - 0.5);
+    //         let plane_ray = PlaneRay::new(
+    //             x,
+    //             y,
+    //             housing_radius / dist * cos * v.sqrt() - x / dist,
+    //             housing_radius / dist * sin * v.sqrt() - y / dist,
+    //         );
+    //         plane_ray
+    //     };
+    //     let wavelength_sampler =
+    //         |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+    //     let mut succeeded = false;
+    //     for _ in 0..100 {
+    //         let input = Input {
+    //             ray: plane_ray_sampler(&mut sampler),
+    //             lambda: wavelength_sampler(&mut sampler),
+    //         };
+
+    //         let maybe_output = evaluate_aperture(&lenses, 0.0, &input, 0, 1.0);
+    //         println!("{:?}", input);
+    //         if let Ok(output) = maybe_output {
+    //             println!("{:?}", output);
+    //             succeeded = true;
+    //             break;
+    //         }
+    //     }
+    //     assert!(succeeded);
+    // }
+
+    // #[test]
+    // fn test_evaluate_reverse() {
+    //     let lenses = construct_lenses();
+
+    //     let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+    //     // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+    //     let dist = lenses.last().unwrap().thickness_at(0.0);
+    //     let first = lenses.first().unwrap();
+    //     println!("total lens thickness is {}", dist);
+
+    //     let position_span = 100.0;
+    //     let direction_span = 10.0;
+
+    //     let sphere_ray_sampler = |sampler: &mut Box<dyn Sampler>| {
+    //         let Sample2D { x, y } = sampler.draw_2d();
+    //         let Sample2D { x: u, y: v } = sampler.draw_2d();
+    //         // let theta = 2.0 * 3.1415926535 * u;
+    //         let theta: f32 = if u > 0.5 { 0.0 } else { 3.1415926535 };
+    //         let v_sqrt = v.sqrt();
+    //         let (sin, cos) = theta.sin_cos();
+    //         let incoming = Ray::new(
+    //             Point3::new((x - 0.5) * position_span, (y - 0.5) * position_span, 0.0),
+    //             Vec3::new(
+    //                 direction_span * cos * v_sqrt,
+    //                 direction_span * sin * v_sqrt,
+    //                 -100.0,
+    //             )
+    //             .normalized(),
+    //         );
+    //         println!("incoming ray {:?}", incoming);
+
+    //         camera_space_to_sphere(incoming, -first.radius, first.radius)
+    //     };
+    //     let wavelength_sampler =
+    //         |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+    //     let mut succeeded = false;
+    //     for _ in 0..100 {
+    //         let input = Input {
+    //             ray: sphere_ray_sampler(&mut sampler),
+    //             lambda: wavelength_sampler(&mut sampler),
+    //         };
+
+    //         let maybe_output = evaluate_reverse(&lenses, 0.0, &input, 0, 1.0);
+
+    //         if let Ok(output) = maybe_output {
+    //             println!("{:?}", output);
+    //             succeeded = true;
+    //             break;
+    //         }
+    //     }
+    //     assert!(succeeded);
+    // }
+    // #[test]
+    // fn test_evaluate_reverse_aperture() {
+    //     let lenses = construct_lenses();
+
+    //     // let mut sampler: Box<dyn Sampler> = Box::new(StratifiedSampler::new(20, 20, 20));
+    //     // // let mut sampler: Box<dyn Sampler> = Box::new(RandomSampler::new());
+    //     // let ray_sampler = |mut sampler: &mut Box<dyn Sampler>| {
+    //     //     let Sample2D { x: x1, y: y1 } = sampler.draw_2d();
+    //     //     let Sample2D { x: x2, y: y2 } = sampler.draw_2d();
+    //     //     Ray::new(
+    //     //         Point3::ZERO + Vec3::new((2.0 * x1 - 1.0) / 2.0, (2.0 * y1 - 1.0) / 2.0, 0.0),
+    //     //         Vec3::new((x1 * 2.0 - 1.0) / 2.0, (y2 * 2.0 - 1.0) / 2.0, 7.0).normalized(),
+    //     //     )
+    //     // };
+    //     // let wavelength_sampler =
+    //     //     |mut sampler: &mut Box<dyn Sampler>| sampler.draw_1d().x * 0.3 + 0.4;
+    //     let mut succeeded = false;
+    //     for _ in 0..10000 {
+    //         let input = basic_sphere_input(lenses[0].radius);
+
+    //         let maybe_output = evaluate_aperture_reverse(&lenses, 0.0, &input, 0, 1.0);
+    //         match maybe_output {
+    //             Ok(output) => {
+    //                 println!("{:?}", input);
+    //                 println!("{:?}", output);
+    //                 succeeded = true;
+    //                 break;
+    //             }
+    //             Err(e) => {
+    //                 print!("{}", e);
+    //             }
+    //         }
+    //     }
+    //     assert!(succeeded);
+    // }
 }
