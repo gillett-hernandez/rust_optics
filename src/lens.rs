@@ -157,6 +157,7 @@ impl LensInterface {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct LensAssembly {
     pub lenses: Vec<LensInterface>,
     pub aperture_index: usize,
