@@ -1,7 +1,7 @@
 use std::f32::EPSILON;
 
 // use std::vec::Vec;
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Film<T> {
     pub buffer: Vec<T>,
     pub width: usize,

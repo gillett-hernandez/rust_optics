@@ -1,6 +1,7 @@
 use crate::math::*;
 use crate::*;
 
+#[derive(Debug, Clone)]
 pub struct RadialSampler {
     pub cache: Film<f32x4>,
     pub sensor_size: f32,
