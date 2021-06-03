@@ -7,8 +7,6 @@ pub struct RadialSampler {
     pub wavelength_bounds: Bounds1D,
     pub wavelength_bins: usize,
     pub radius_bins: usize,
-    pub width: usize,
-    pub height: usize,
 }
 
 impl RadialSampler {
@@ -24,8 +22,6 @@ impl RadialSampler {
         aperture_callback: F,
         solver_heat: f32,
         sensor_size: f32,
-        width: usize,
-        height: usize,
     ) -> Self
     where
         F: Send + Sync + Fn(f32, Ray) -> bool,
@@ -115,18 +111,10 @@ impl RadialSampler {
             wavelength_bins,
 
             radius_bins,
-            width,
-            height,
         }
     }
 
-    pub fn sample(
-        &self,
-        lambda: f32,
-        point: Point3,
-        s0: Sample2D,
-        s1: Sample1D,
-    ) -> Vec3 {
+    pub fn sample(&self, lambda: f32, point: Point3, s0: Sample2D, s1: Sample1D) -> Vec3 {
         let [x, y, z, _]: [f32; 4] = point.0.into();
 
         let rotation_angle = y.atan2(x);

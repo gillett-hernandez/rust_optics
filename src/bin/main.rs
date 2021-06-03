@@ -198,8 +198,8 @@ fn main() {
 
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
-    let direction_cache_radius_bins = 128;
-    let direction_cache_wavelength_bins = 128;
+    let direction_cache_radius_bins = 1024;
+    let direction_cache_wavelength_bins = 1024;
 
     let mut direction_cache = RadialSampler::new(
         SQRT_2 * sensor_size / 2.0, // diagonal.
@@ -212,8 +212,6 @@ fn main() {
         |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
         heat_bias,
         sensor_size,
-        width,
-        height,
     );
 
     let mut last_pressed_hotkey = Key::A;
@@ -452,8 +450,6 @@ fn main() {
                 |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
                 heat_bias,
                 sensor_size,
-                width,
-                height,
             );
         }
 
