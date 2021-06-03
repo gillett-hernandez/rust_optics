@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
 use film::Film;
 use lens_sampler::RadialSampler;
-use lib::*;
+use optics::*;
 use parse::*;
 
 use ::math::spectral::BOUNDED_VISIBLE_RANGE;
