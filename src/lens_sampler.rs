@@ -157,6 +157,14 @@ impl RadialSampler {
 
         debug_assert!(du.is_finite(), "{}", du);
         debug_assert!(dv.is_finite(), "{}", dv);
+        debug_assert!(angles00.extract(0).is_finite(), "{:?}", angles00);
+        debug_assert!(angles01.extract(0).is_finite(), "{:?}", angles01);
+        debug_assert!(angles10.extract(0).is_finite(), "{:?}", angles10);
+        debug_assert!(angles11.extract(0).is_finite(), "{:?}", angles11);
+        debug_assert!(angles00.extract(1).is_finite(), "{:?}", angles00);
+        debug_assert!(angles01.extract(1).is_finite(), "{:?}", angles01);
+        debug_assert!(angles10.extract(1).is_finite(), "{:?}", angles10);
+        debug_assert!(angles11.extract(1).is_finite(), "{:?}", angles11);
         // bilinear interpolation
         let (phi, dphi) = (
             (1.0 - du) * (1.0 - dv) * angles00.extract(0)
