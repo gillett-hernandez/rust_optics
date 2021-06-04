@@ -177,6 +177,7 @@ impl RadialSampler {
             phi.cos(),
             0.0,
         ));
+        debug_assert!(direction.0.is_finite().all());
         let radius = dphi * 1.01;
 
         // choose direction somehow
@@ -185,7 +186,9 @@ impl RadialSampler {
         let frame = TangentFrame::from_normal(Vec3::from_raw(direction.0.replace(3, 0.0)));
         let phi = s1.x * TAU;
         let r = s2d.x.sqrt() * radius;
+        debug_assert!(!r.is_nan());
         let unnormalized_v = Vec3::Z + Vec3::new(r * phi.cos(), r * phi.sin(), 0.0);
+        debug_assert!(unnormalized_v.0.is_finite().all());
         // transforming a normalized vector should yield another normalized vector, as long as all the frame components are orthonormal.
         frame.to_world(&unnormalized_v.normalized())
     }
