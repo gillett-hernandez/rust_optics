@@ -177,9 +177,9 @@ impl RadialSampler {
             phi.cos(),
             0.0,
         ));
-        debug_assert!(dx.is_finite());
+        debug_assert!(phi.is_finite(), "{}", phi);
         debug_assert!(rotation_angle.is_finite());
-        debug_assert!(phi.is_finite());
+        debug_assert!(dx.is_finite(), "{}", dx);
         debug_assert!(direction.0.is_finite().all());
         let radius = dphi * 1.01;
 
