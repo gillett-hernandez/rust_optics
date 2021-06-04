@@ -273,6 +273,7 @@ impl LensAssembly {
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
             let res = refract(n1, n2, normal, ray.direction);
             ray.direction = res.0;
+            debug_assert!(ray.direction.0.is_finite().all(), "{:?}", ray.direction);
             intensity *= res.1;
             if intensity < INTENSITY_EPS {
                 error |= 8;
