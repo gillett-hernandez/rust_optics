@@ -283,6 +283,7 @@ impl LensAssembly {
             }
             // not sure why this normalize is here.
             ray.direction = ray.direction.normalized();
+            debug_assert!(ray.direction.0.is_finite().all(), "{:?}", ray.direction);
             n1 = n2;
         }
         Some(Output {
