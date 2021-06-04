@@ -147,7 +147,7 @@ impl RadialSampler {
         // do bilinear interpolation?
         let (du, dv) = (
             u - d_x_idx as f32 / self.radius_bins as f32,
-            u - d_y_idx as f32 / self.wavelength_bins as f32,
+            v - d_y_idx as f32 / self.wavelength_bins as f32,
         );
 
         // let (phi, dphi) = (angles00.extract(0), angles00.extract(1));
@@ -155,6 +155,8 @@ impl RadialSampler {
         // direct lookup through uv
         // let [phi, dphi, _, _]: [f32; 4] = direction_cache_film.at_uv((u, v)).into();
 
+        debug_assert!(du.is_finite(), "{}", du);
+        debug_assert!(dv.is_finite(), "{}", dv);
         // bilinear interpolation
         let (phi, dphi) = (
             (1.0 - du) * (1.0 - dv) * angles00.extract(0)
