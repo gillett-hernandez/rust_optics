@@ -112,7 +112,7 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
     let mut lenses: Vec<LensInterface> = Vec::new();
     let (mut last_ior, mut last_vno) = (1.0, 0.0);
     for line in lines {
-        if line.starts_with("#") {
+        if line.starts_with("#") || line == "" || line == "\n" {
             continue;
         }
         let lens = LensInterface::parse_from(line, last_ior, last_vno).unwrap();

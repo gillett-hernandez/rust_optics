@@ -1,4 +1,5 @@
 use packed_simd::f32x4;
+use rand::random;
 
 use std::cmp::PartialEq;
 
@@ -7,7 +8,7 @@ pub use crate::math::{
     Input, Output, PlaneRay, Point3, RandomSampler, Ray, Sample1D, Sample2D, Sample3D, Sampler,
     SphereRay, StratifiedSampler, TangentFrame, Vec3,
 };
-use rand::random;
+use crate::parse_lenses_from;
 
 const INTENSITY_EPS: f32 = 0.0001;
 
@@ -625,23 +626,6 @@ pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f3
             [0, 1, 4, 5]
         ),
     }
-}
-
-pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
-    let lines = spec.lines();
-    let mut lenses: Vec<LensInterface> = Vec::new();
-    let (mut last_ior, mut last_vno) = (1.0, 0.0);
-    for line in lines {
-        if line.starts_with("#") {
-            continue;
-        }
-        let lens = LensInterface::parse_from(line, last_ior, last_vno).unwrap();
-        last_ior = lens.ior;
-        last_vno = lens.vno;
-        // println!("successfully parsed lens {:?}", lens);
-        lenses.push(lens);
-    }
-    (lenses, last_ior, last_vno)
 }
 
 #[cfg(test)]
