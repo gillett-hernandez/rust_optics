@@ -40,20 +40,16 @@ impl RadialSampler {
 
             // switch flag to change from random to stratified.
             let ray_origin = Point3::new(radius, 0.0, film_position);
-            let mut direction;
+            let mut direction = Vec3::Z;
             // let mut state = 0;
-            loop {
+            for _ in 0..1000 {
                 // directions range from straight forward (0 degrees) to almost critical (90 degrees, tangent)
-                if true {
-                    // random sampling along axis until direction is found.
-                    let s = Sample1D::new_random_sample();
-                    let angle = s.x * std::f32::consts::FRAC_PI_2 * 0.97;
-                    direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
-                } else {
-                    // stratified sampling along axis until direction is found.
-                    // state += 1;
-                    panic!();
-                }
+
+                // random sampling along axis until direction is found.
+                let s = Sample1D::new_random_sample();
+                let angle = s.x * std::f32::consts::FRAC_PI_2 * 0.97;
+                direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
+
                 let ray = Ray::new(ray_origin, direction);
                 let result =
                     lens_assembly.trace_forward(lens_zoom, &Input { ray, lambda }, 1.0, |e| {

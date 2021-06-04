@@ -135,12 +135,12 @@ fn main() {
     }
 
     let original_aperture_radius = lens_assembly.aperture_radius();
-    let mut aperture_radius = original_aperture_radius / 10.0; // start with small aperture
+    let mut aperture_radius = original_aperture_radius / 6.0; // start with small aperture
     let mut heat_bias = 0.01;
     let mut heat_cap = 10.0;
     let mut lens_zoom = 0.0;
     let mut film_position = -lens_assembly.total_thickness_at(lens_zoom);
-    let mut wall_position = 240.0;
+    let mut wall_position = 1000.0;
     let mut sensor_size = 35.0;
     let mut samples_per_iteration = 1usize;
     let mut total_samples = 0;
@@ -198,8 +198,8 @@ fn main() {
 
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
-    let direction_cache_radius_bins = 1024;
-    let direction_cache_wavelength_bins = 1024;
+    let direction_cache_radius_bins = 512;
+    let direction_cache_wavelength_bins = 512;
 
     let mut direction_cache = RadialSampler::new(
         SQRT_2 * sensor_size / 2.0, // diagonal.
@@ -245,9 +245,10 @@ fn main() {
                     // Film
                     println!("mode switched to Film position (focus) mode");
                     println!(
-                        "{:?}, {:?}",
+                        "{:?}, {:?}, offset = {}",
                         film_position,
-                        lens_assembly.total_thickness_at(lens_zoom)
+                        lens_assembly.total_thickness_at(lens_zoom),
+                        -lens_assembly.total_thickness_at(lens_zoom) - film_position
                     );
                     last_pressed_hotkey = Key::F;
                 }
