@@ -101,7 +101,11 @@ impl RadialSampler {
                     }
                 }
             }
-            let avg_angle = sum_angle / (valid_angle_count as f32);
+            let avg_angle = if valid_angle_count > 0 {
+                sum_angle / (valid_angle_count as f32)
+            } else {
+                0.0
+            };
 
             *v = f32x4::new(avg_angle, (max_angle - min_angle).abs() / 2.0, 0.0, 0.0);
         });
