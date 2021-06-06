@@ -19,8 +19,10 @@ use parse::*;
 use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
 use tonemap::{sRGB, Tonemapper};
 
+#[derive(Debug, Copy, Clone)]
 pub enum Mode {
     Texture,
+    SpotLight,
     PinLight,
 }
 fn main() {
@@ -391,8 +393,10 @@ fn main() {
             // do mode transition
             mode = match mode {
                 Mode::Texture => Mode::PinLight,
-                Mode::PinLight => Mode::Texture,
+                Mode::PinLight => Mode::SpotLight,
+                Mode::SpotLight => Mode::Texture,
             };
+            println!("new mode is {:?}", mode);
         }
         if clear_film {
             film.buffer
@@ -493,8 +497,8 @@ fn main() {
 
                     Ray::new(point_on_texture, v)
                 }
-                // directional light
-                Mode::PinLight => {
+                // parallel light
+                Mode::SpotLight => {
                     // 4 quadrants.
 
                     let (r, phi) = (
@@ -505,6 +509,22 @@ fn main() {
                     let (px, py) = (r * phi.cos(), r * phi.sin());
 
                     Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
+                }
+                Mode::PinLight => {
+                    // 4 quadrants.
+
+                    let (r, phi) = (
+                        random::<f32>().sqrt() * texture_scale,
+                        random::<f32>() * TAU,
+                    );
+
+                    let (dx, dy) = (r * phi.cos(), r * phi.sin());
+                    let (px, py) = (0.0, 0.0);
+
+                    Ray::new(
+                        Point3::new(px, py, wall_position),
+                        Vec3::new(dx, dy, -1.0).normalized(),
+                    )
                 }
             };
             // println!("{:?}", ray);
