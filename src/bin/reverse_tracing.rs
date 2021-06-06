@@ -3,21 +3,26 @@ use std::f32::{
     EPSILON,
 };
 
+use crate::math::Sample2D;
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 use packed_simd::f32x4;
 use rand::prelude::*;
 use rayon::prelude::*;
 
-use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
+use crate::math::{random_cosine_direction, SingleWavelength, XYZColor};
 use film::Film;
 use lens_sampler::RadialSampler;
 use optics::*;
 use parse::*;
 
-use ::math::spectral::BOUNDED_VISIBLE_RANGE;
+use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
 use tonemap::{sRGB, Tonemapper};
 
+pub enum Mode {
+    Texture,
+    PinLight,
+}
 fn main() {
     const WINDOW_WIDTH: usize = 800;
     const WINDOW_HEIGHT: usize = 800;
@@ -88,42 +93,42 @@ fn main() {
     // -62.03   4.20  N-SF10 1.5 50 24.0
     // -1240.67 5.00  air           24.0
     // 100000  105.00  iris          20.0"; // lensbaby
-    let spec = " 70.97  15.0 abbe 1.523 58.6  23
-                         -56.79   4.5 abbe 1.617 38.5  23
-                         100000.0 24.0 air             23
-                         100000.0 25.3 iris            18
-                         119.91   3.8 abbe 1.649 33.8  15
-                         40.87    0.9 air              15
-                         46.87    7.4 abbe 1.697 56.1  15
-                         -282.05 56.5 air              15"; // petzval kodak
-                                                            // let spec = "33.072		2.366				C3			1.518	59.0	8.9
-                                                            // -53.387		0.077				air                 8.9
-                                                            // 27.825		2.657				C3			1.518	59.0	8.4
-                                                            // -35.934		1.025				LAF7		1.749	35.0	8.3
-                                                            // 40.900		22.084				air							7.8
-                                                            // 10000		1.794				FD110		1.785	25.7	4.7
-                                                            // -16.775		0.641				TAFD5		1.835	43.0	4.6
-                                                            // 27.153		8.607				air							4.5
-                                                            // 10000       1.0                   iris                      4.8
-                                                            // -120.75		1.035				CF6			1.517	52.2	4.8
-                                                            // -12.105		4.705				air							4.8
-                                                            // -9.386		0.641				TAF1		1.773	49.6	4.0
-                                                            // -24.331		18.960				air							4.1"; // kreitzer telephoto
-                                                            // let spec = "96.15 7.00 abbe 1.64 58.1             50.0
-                                                            // 53.85 17.38 air                       50.0
-                                                            // 117.48 5.59 abbe 1.58904 53.2         45.0
-                                                            // 69.93 52.45 air                       45.0
-                                                            // 106.64 15.73 abbe 1.76684 46.2        25.0
-                                                            // -188.11 4.90 air                      25.0
-                                                            // -192.31 15.38 abbe 1.76684 27.5       25.0
-                                                            // -140.91 9.58 air                      25.0
-                                                            // 100000 10.0 iris                      25.0
-                                                            // -65.04 16.22 abbe 1.7552 27.5         25.0
-                                                            // 188.11 2.52 air                       25.0
-                                                            // -323.43 7.00 abbe 1.713 53.9          25.0
-                                                            // -65.39 0.18 air                       25.0
-                                                            // -8741.25 6.64 abbe 1.6583 57.3        30.0
-                                                            // -117.55 131.19 air                    30.0"; // wideangle 2
+    // let spec = " 70.97  15.0 abbe 1.523 58.6  23
+    //                      -56.79   4.5 abbe 1.617 38.5  23
+    //                      100000.0 24.0 air             23
+    //                      100000.0 25.3 iris            18
+    //                      119.91   3.8 abbe 1.649 33.8  15
+    //                      40.87    0.9 air              15
+    //                      46.87    7.4 abbe 1.697 56.1  15
+    //                      -282.05 56.5 air              15"; // petzval kodak
+    // let spec = "33.072		2.366				C3			1.518	59.0	8.9
+    // -53.387		0.077				air                 8.9
+    // 27.825		2.657				C3			1.518	59.0	8.4
+    // -35.934		1.025				LAF7		1.749	35.0	8.3
+    // 40.900		22.084				air							7.8
+    // 10000		1.794				FD110		1.785	25.7	4.7
+    // -16.775		0.641				TAFD5		1.835	43.0	4.6
+    // 27.153		8.607				air							4.5
+    // 10000       1.0                   iris                      4.8
+    // -120.75		1.035				CF6			1.517	52.2	4.8
+    // -12.105		4.705				air							4.8
+    // -9.386		0.641				TAF1		1.773	49.6	4.0
+    // -24.331		18.960				air							4.1"; // kreitzer telephoto
+    let spec = "96.15 7.00 abbe 1.64 58.1             50.0
+53.85 17.38 air                       50.0
+117.48 5.59 abbe 1.58904 53.2         45.0
+69.93 52.45 air                       45.0
+106.64 15.73 abbe 1.76684 46.2        25.0
+-188.11 4.90 air                      25.0
+-192.31 15.38 abbe 1.76684 27.5       25.0
+-140.91 9.58 air                      25.0
+100000 10.0 iris                      25.0
+-65.04 16.22 abbe 1.7552 27.5         25.0
+188.11 2.52 air                       25.0
+-323.43 7.00 abbe 1.713 53.9          25.0
+-65.39 0.18 air                       25.0
+-8741.25 6.64 abbe 1.6583 57.3        30.0
+-117.55 131.19 air                    30.0"; // wideangle 2
     let (lenses, _last_ior, _last_vno) = parse_lenses_from(spec);
     let lens_assembly = LensAssembly::new(&lenses);
 
@@ -135,92 +140,47 @@ fn main() {
     }
 
     let original_aperture_radius = lens_assembly.aperture_radius();
-    let mut aperture_radius = original_aperture_radius / 6.0; // start with small aperture
     let mut heat_bias = 0.01;
     let mut heat_cap = 10.0;
+
+    let mut aperture_radius = original_aperture_radius / 3.0; // start with small aperture
     let mut lens_zoom = 0.0;
-    let mut film_position = -lens_assembly.total_thickness_at(lens_zoom);
-    let mut wall_position = 1000.0;
+    let mut sensor_pos = -lens_assembly.total_thickness_at(lens_zoom);
+    let mut wall_position = 5000.0;
     let mut sensor_size = 35.0;
-    let mut samples_per_iteration = 1usize;
+    let mut texture_scale = 30.0;
+
+    let mut samples_per_iteration = 1000usize;
     let mut total_samples = 0;
     let mut focal_distance_suggestion = None;
     let mut focal_distance_vec: Vec<f32> = Vec::new();
     let mut variance: f32 = 0.0;
     let mut stddev: f32 = 0.0;
 
-    // while window.is_open() && !window.is_key_down(Key::Escape) {
-    //     let keys = window.get_keys_pressed(KeyRepeat::Yes);
-    //     for key in keys.unwrap_or(vec![]) {
-    //         match key {
-    //             Key::A => {
-    //                 aperture_radius /= 1.1;
-    //                 println!(
-    //                     "registered input A, aperture_size = {}, sensor_size = {}",
-    //                     aperture_radius, sensor_size
-    //                 );
-    //             }
-    //             Key::B => {
-    //                 aperture_radius *= 1.1;
-    //                 println!(
-    //                     "registered input B, aperture_size = {}, sensor_size = {}",
-    //                     aperture_radius, sensor_size
-    //                 );
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    //     buffer
-    //         .buffer
-    //         .par_iter_mut()
-    //         .enumerate()
-    //         .for_each(|(i, pixel)| {
-    //             let px = i % width;
-    //             let py = i / width;
-    //             let u = px as f32 / width as f32;
-    //             let v = py as f32 / height as f32;
-    //             let dummy_ray = Ray::new(
-    //                 Point3::new(sensor_size * (u - 0.5), sensor_size * (v - 0.5), 0.0),
-    //                 Vec3::Z,
-    //             );
-    //             let rejected = bladed_aperture(aperture_radius, 6, dummy_ray);
-    //             if !rejected {
-    //                 *pixel = rgb_to_u32(255, 255, 255);
-    //             } else {
-    //                 *pixel = 0u32;
-    //             }
-    //         });
-
-    //     window
-    //         .update_with_buffer(&buffer.buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
-    //         .unwrap();
-    // }
-
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
     let direction_cache_radius_bins = 512;
     let direction_cache_wavelength_bins = 512;
 
-    let mut direction_cache = RadialSampler::new(
-        SQRT_2 * sensor_size / 2.0, // diagonal.
-        direction_cache_radius_bins,
-        direction_cache_wavelength_bins,
-        wavelength_bounds,
-        film_position,
-        &lens_assembly,
-        lens_zoom,
-        |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
-        heat_bias,
-        sensor_size,
-    );
+    // let mut direction_cache = RadialSampler::new(
+    //     SQRT_2 * sensor_size / 2.0, // diagonal.
+    //     direction_cache_radius_bins,
+    //     direction_cache_wavelength_bins,
+    //     wavelength_bounds,
+    //     sensor_pos,
+    //     &lens_assembly,
+    //     lens_zoom,
+    //     |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
+    //     heat_bias,
+    //     sensor_size,
+    // );
 
     let mut last_pressed_hotkey = Key::A;
     let mut wavelength_sweep: f32 = 0.0;
     let mut wavelength_sweep_speed = 0.001;
-    let mut texture_scale = 10.0;
     let mut efficiency = 0.0;
     let efficiency_heat = 0.99;
-    let mut mode = Mode::PinLight;
+    let mut mode = Mode::Texture;
     let mut paused = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -246,10 +206,11 @@ fn main() {
                     println!("mode switched to Film position (focus) mode");
                     println!(
                         "{:?}, {:?}, offset = {}",
-                        film_position,
+                        sensor_pos,
                         lens_assembly.total_thickness_at(lens_zoom),
-                        -lens_assembly.total_thickness_at(lens_zoom) - film_position
+                        sensor_pos + lens_assembly.total_thickness_at(lens_zoom)
                     );
+                    println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
                     last_pressed_hotkey = Key::F;
                 }
                 Key::W => {
@@ -335,10 +296,10 @@ fn main() {
                     clear_direction_cache = true;
                     total_samples = 0;
                     println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
-                    film_position += 1.0 * config_direction;
+                    sensor_pos += 1.0 * config_direction;
                     println!(
                         "{:?}, {:?}",
-                        film_position,
+                        sensor_pos,
                         lens_assembly.total_thickness_at(lens_zoom)
                     );
                 }
@@ -430,8 +391,7 @@ fn main() {
             // do mode transition
             mode = match mode {
                 Mode::Texture => Mode::PinLight,
-                Mode::PinLight => Mode::Direction,
-                Mode::Direction => Mode::Texture,
+                Mode::PinLight => Mode::Texture,
             };
         }
         if clear_film {
@@ -440,18 +400,18 @@ fn main() {
                 .for_each(|e| *e = XYZColor::BLACK)
         }
         if clear_direction_cache {
-            direction_cache = RadialSampler::new(
-                SQRT_2 * sensor_size / 2.0, // diagonal.
-                direction_cache_radius_bins,
-                direction_cache_wavelength_bins,
-                wavelength_bounds,
-                film_position,
-                &lens_assembly,
-                lens_zoom,
-                |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
-                heat_bias,
-                sensor_size,
-            );
+            // direction_cache = RadialSampler::new(
+            //     SQRT_2 * sensor_size / 2.0, // diagonal.
+            //     direction_cache_radius_bins,
+            //     direction_cache_wavelength_bins,
+            //     wavelength_bounds,
+            //     sensor_pos,
+            //     &lens_assembly,
+            //     lens_zoom,
+            //     |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
+            //     heat_bias,
+            //     sensor_size,
+            // );
         }
 
         let srgb_tonemapper = sRGB::new(&film, 1.0);
@@ -459,7 +419,7 @@ fn main() {
         // autofocus:
         {
             let n = 25;
-            let origin = Point3::new(0.0, 0.0, film_position);
+            let origin = Point3::new(0.0, 0.0, sensor_pos);
             let direction = Point3::new(
                 0.0,
                 lens_assembly.lenses.last().unwrap().housing_radius,
@@ -508,104 +468,77 @@ fn main() {
 
         // let lambda = wavelength_bounds.span() * random::<f32>() + wavelength_bounds.lower;
 
-        let (a, b) = film
-            .buffer
-            .par_iter_mut()
-            .enumerate()
-            .map(|(i, pixel)| {
-                let mut sampler = RandomSampler::new();
-                let px = i % width;
-                let py = i / width;
+        let mut sampler = RandomSampler::new();
 
-                let (mut successes, mut attempts) = (0, 0);
-                let lambda = wavelength_bounds.sample(random::<f32>());
+        let (mut successes, mut attempts) = (0, 0);
+        let lambda = wavelength_bounds.sample(random::<f32>());
 
-                let central_point = Point3::new(
-                    ((px as f32 + 0.5) / width as f32 - 0.5) * sensor_size,
-                    ((py as f32 + 0.5) / height as f32 - 0.5) * sensor_size,
-                    film_position,
-                );
-                for _ in 0..samples_per_iteration {
-                    let v;
-                    let s0 = sampler.draw_2d();
-                    let [mut x, mut y, z, _]: [f32; 4] = central_point.0.into();
-                    x += (s0.x - 0.5) / width as f32 * sensor_size;
-                    y += (s0.y - 0.5) / height as f32 * sensor_size;
+        for _ in 0..samples_per_iteration {
+            // ray is generated according to texture scale.
+            let ray = match mode {
+                // diffuse emitter texture
+                Mode::Texture => {
+                    // 4 possible quadrants.
+                    let (rx, ry) = (random::<f32>() * 2.0 - 1.0, random::<f32>() * 2.0 - 1.0);
 
-                    let point = Point3::new(x, y, z);
-                    if true {
-                        // using lens symmetry sampler
+                    let (r, phi) = (
+                        random::<f32>().sqrt() * lens_assembly.lenses[0].housing_radius,
+                        random::<f32>() * TAU,
+                    );
 
-                        v = direction_cache.sample(
-                            lambda,
-                            point,
-                            sampler.draw_2d(),
-                            sampler.draw_1d(),
-                        );
-                    } else {
-                        // random cosine sampling
-                        v = random_cosine_direction(sampler.draw_2d());
-                    }
-                    let ray = Ray::new(point, v);
+                    let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
+                    let point_on_texture =
+                        Point3::new(texture_scale * rx, texture_scale * ry, wall_position);
+                    let v = (point_on_lens - point_on_texture).normalized();
 
-                    attempts += 1;
-                    // do actual tracing through lens for film sample
-                    let result =
-                        lens_assembly.trace_forward(lens_zoom, &Input { ray, lambda }, 1.0, |e| {
-                            (bladed_aperture(aperture_radius, 6, e), false)
-                        });
-                    if let Some(Output {
-                        ray: pupil_ray,
-                        tau,
-                    }) = result
-                    {
-                        successes += 1;
-                        let t = (wall_position - pupil_ray.origin.z()) / pupil_ray.direction.z();
-                        let point_at_10 = pupil_ray.point_at_parameter(t);
-                        let uv = (
-                            (point_at_10.x().abs() / texture_scale) % 1.0,
-                            (point_at_10.y().abs() / texture_scale) % 1.0,
-                        );
-
-                        match mode {
-                            // // texture based
-                            Mode::Texture => {
-                                let m = textures[0].eval_at(lambda, uv);
-                                let energy = tau * m * 3.0;
-                                *pixel +=
-                                    XYZColor::from(SingleWavelength::new(lambda, energy.into()));
-                            }
-                            // // spot light based
-                            Mode::PinLight => {
-                                let m = if (uv.0 - 0.5).powi(2) + (uv.1 - 0.5).powi(2) < 0.001 {
-                                    // if pupil_ray.direction.z() > 0.999 {
-                                    //     1.0
-                                    // } else {
-                                    //     0.0
-                                    // }
-                                    1.0
-                                } else {
-                                    0.0
-                                };
-                                let energy = tau * m * 3.0;
-                                *pixel +=
-                                    XYZColor::from(SingleWavelength::new(lambda, energy.into()));
-                            }
-                            Mode::Direction => {
-                                *pixel = XYZColor::new(
-                                    (1.0 + v.x()) * (1.0 + v.w()),
-                                    (1.0 + v.y()) * (1.0 + v.w()),
-                                    (1.0 + v.z()) * (1.0 + v.w()),
-                                );
-                            }
-                        };
-                    }
+                    Ray::new(point_on_texture, v)
                 }
-                (successes, attempts)
-            })
-            .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-        efficiency =
-            (efficiency_heat) * efficiency + (1.0 - efficiency_heat) * (a as f32 / b as f32);
+                // directional light
+                Mode::PinLight => {
+                    // 4 quadrants.
+
+                    let (r, phi) = (
+                        random::<f32>().sqrt() * texture_scale,
+                        random::<f32>() * TAU,
+                    );
+
+                    let (px, py) = (r * phi.cos(), r * phi.sin());
+
+                    Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
+                }
+            };
+            // println!("{:?}", ray);
+
+            attempts += 1;
+            // do actual tracing through lens for film sample
+            let result =
+                lens_assembly.trace_reverse(lens_zoom, &Input { ray, lambda }, 1.04, |e| {
+                    (bladed_aperture(aperture_radius, 6, e), false)
+                });
+            if let Some(Output {
+                ray: pupil_ray,
+                tau,
+            }) = result
+            {
+                successes += 1;
+                let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
+                let point_at_film = pupil_ray.point_at_parameter(t);
+                let uv = (
+                    (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
+                    (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
+                );
+                film.write_at(
+                    (uv.0 * WINDOW_WIDTH as f32) as usize,
+                    (uv.1 * WINDOW_HEIGHT as f32) as usize,
+                    film.at(
+                        (uv.0 * WINDOW_WIDTH as f32) as usize,
+                        (uv.1 * WINDOW_HEIGHT as f32) as usize,
+                    ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                );
+            }
+        }
+        efficiency = (efficiency_heat) * efficiency
+            + (1.0 - efficiency_heat) * (successes as f32 / attempts as f32);
 
         window_pixels
             .buffer

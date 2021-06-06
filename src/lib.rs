@@ -34,11 +34,6 @@ use std::f32::{
     EPSILON,
 };
 
-pub enum Mode {
-    Texture,
-    PinLight,
-    Direction,
-}
 
 pub fn circular_aperture(aperture_radius: f32, ray: Ray) -> bool {
     ray.origin.x().hypot(ray.origin.y()) > aperture_radius

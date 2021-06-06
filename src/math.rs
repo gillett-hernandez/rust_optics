@@ -9,10 +9,7 @@ use rand::{thread_rng, Rng, RngCore};
 #[allow(non_upper_case_globals)]
 pub const f32x4_ZERO: f32x4 = f32x4::new(0.0, 0.0, 0.0, 0.0);
 
-pub use math::{
-    Point3, RandomSampler, Ray, Sample1D, Sample2D, Sample3D, Sampler, StratifiedSampler,
-    TangentFrame, Vec3,
-};
+pub use math::*;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Input<T> {

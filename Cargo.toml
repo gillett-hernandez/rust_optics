@@ -3,7 +3,7 @@ name = "rust_optics"
 version = "0.1.0"
 authors = ["Gillett Hernandez <gillett.hernandez@gmail.com>"]
 edition = "2018"
-default-run = "main"
+default-run = "forward_tracing"
 
 [dependencies]
 itertools = "0.10.0"
