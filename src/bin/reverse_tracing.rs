@@ -1,18 +1,15 @@
-use std::f32::{
-    consts::{SQRT_2, TAU},
-    EPSILON,
-};
+use std::{f32::consts::TAU, fs::File, io::Read};
 
-use crate::math::Sample2D;
+// use crate::math::Sample2D;
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
-use packed_simd::f32x4;
-use rand::prelude::*;
+// use packed_simd::f32x4;
+// use rand::prelude::*;
 use rayon::prelude::*;
 
-use crate::math::{random_cosine_direction, SingleWavelength, XYZColor};
+use crate::math::{SingleWavelength, XYZColor};
 use film::Film;
-use lens_sampler::RadialSampler;
+// use lens_sampler::RadialSampler;
 use optics::*;
 use parse::*;
 
@@ -34,7 +31,7 @@ fn main() {
         .build_global()
         .unwrap();
     let mut window = Window::new(
-        "Lens",
+        "reverse tracing",
         WINDOW_WIDTH,
         WINDOW_HEIGHT,
         WindowOptions {
@@ -52,86 +49,15 @@ fn main() {
     // Limit to max ~144 fps update rate
     window.limit_update_rate(Some(std::time::Duration::from_micros(6944)));
     let width = film.width;
-    let height = film.height;
+    // let height = film.height;
 
     let frame_dt = 6944.0 / 1000000.0;
-    // let spec = "35.0 20.0 bk7 1.5 54.0 15.0
-    // -35.0 1.73 air        15.0
-    // 100000 3.00  iris    10.0
-    // 1035.0 7.0 bk7 1.5 54.0 15.0
-    // -35.0 20 air        15.0"; // simple 2
-    // let spec = "42.97		9.8			LAK9	1.6910	54.8	19.2
-    // -115.33		2.1			LLF7	1.5486  45.4	19.2
-    // 306.84		4.16		air			           	19.2
-    // 100000		4.0			iris			      	15
-    // -59.06		1.87		SF7		1.6398  34.6   	17.3
-    // 40.93		10.64		air		       			17.3
-    // 183.92		7.05		LAK9	1.6910  54.8   	16.5
-    // -48.91		79.831		air						16.5"; // brendel tressar
-    // let spec = "52.9     5.8  abbe   1.517  62 15
-    // -41.4    1.5  abbe   1.576  54 15
-    // 436.2    23.3 air              15
-    // 100000.0 23.3 iris             10
-    // 104.8    2.2  abbe   1.517  62 9
-    // 36.8     0.7  air              9
-    // 45.5     3.6  abbe   1.576  54 9
-    // -149.5   50   air              9"; // petzval
-    // let spec = "164.12		10.99				SF5			1.673	32.2	54
-    // 559.28		0.23				air							54
-    // 100.12		11.45				BAF10		1.67	47.1    51
-    // 213.54		0.23				air							51
-    // 58.04		22.95				LAK9		1.691	54.7	41
-    // 2551		2.58				SF5			1.673	32.2	41
-    // 32.39		15.66				air							27
-    // 10000		15.00				iris						25.5
-    // -40.42		2.74				SF15		1.699	30.1	25
-    // 192.98		27.92				SK16		1.62	60.3	36
-    // -55.53		0.23				air							36
-    // 192.98		7.98				LAK9		1.691	54.7	35
-    // -225.28		0.23				air							35
-    // 175.1		8.48				LAK9		1.691	54.7	35
-    // -203.54		55.742				air							35"; // double gauss angenioux
-    // let spec = "65.22    9.60  N-SSK8 1.5 50 24.0
-    // -62.03   4.20  N-SF10 1.5 50 24.0
-    // -1240.67 5.00  air           24.0
-    // 100000  105.00  iris          20.0"; // lensbaby
-    // let spec = " 70.97  15.0 abbe 1.523 58.6  23
-    //                      -56.79   4.5 abbe 1.617 38.5  23
-    //                      100000.0 24.0 air             23
-    //                      100000.0 25.3 iris            18
-    //                      119.91   3.8 abbe 1.649 33.8  15
-    //                      40.87    0.9 air              15
-    //                      46.87    7.4 abbe 1.697 56.1  15
-    //                      -282.05 56.5 air              15"; // petzval kodak
-    // let spec = "33.072		2.366				C3			1.518	59.0	8.9
-    // -53.387		0.077				air                 8.9
-    // 27.825		2.657				C3			1.518	59.0	8.4
-    // -35.934		1.025				LAF7		1.749	35.0	8.3
-    // 40.900		22.084				air							7.8
-    // 10000		1.794				FD110		1.785	25.7	4.7
-    // -16.775		0.641				TAFD5		1.835	43.0	4.6
-    // 27.153		8.607				air							4.5
-    // 10000       1.0                   iris                      4.8
-    // -120.75		1.035				CF6			1.517	52.2	4.8
-    // -12.105		4.705				air							4.8
-    // -9.386		0.641				TAF1		1.773	49.6	4.0
-    // -24.331		18.960				air							4.1"; // kreitzer telephoto
-    let spec = "96.15 7.00 abbe 1.64 58.1             50.0
-53.85 17.38 air                       50.0
-117.48 5.59 abbe 1.58904 53.2         45.0
-69.93 52.45 air                       45.0
-106.64 15.73 abbe 1.76684 46.2        25.0
--188.11 4.90 air                      25.0
--192.31 15.38 abbe 1.76684 27.5       25.0
--140.91 9.58 air                      25.0
-100000 10.0 iris                      25.0
--65.04 16.22 abbe 1.7552 27.5         25.0
-188.11 2.52 air                       25.0
--323.43 7.00 abbe 1.713 53.9          25.0
--65.39 0.18 air                       25.0
--8741.25 6.64 abbe 1.6583 57.3        30.0
--117.55 131.19 air                    30.0"; // wideangle 2
-    let (lenses, _last_ior, _last_vno) = parse_lenses_from(spec);
+
+    let mut camera_file = File::open("data/cameras/kreitzer_telephoto.txt").unwrap();
+    let mut camera_spec = String::new();
+    camera_file.read_to_string(&mut camera_spec).unwrap();
+
+    let (lenses, _last_ior, _last_vno) = parse_lenses_from(&camera_spec);
     let lens_assembly = LensAssembly::new(&lenses);
 
     let scene = get_scene("textures.toml").unwrap();
@@ -161,8 +87,8 @@ fn main() {
 
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
-    let direction_cache_radius_bins = 512;
-    let direction_cache_wavelength_bins = 512;
+    // let direction_cache_radius_bins = 512;
+    // let direction_cache_wavelength_bins = 512;
 
     // let mut direction_cache = RadialSampler::new(
     //     SQRT_2 * sensor_size / 2.0, // diagonal.
@@ -470,12 +396,11 @@ fn main() {
 
         total_samples += samples_per_iteration;
 
-        // let lambda = wavelength_bounds.span() * random::<f32>() + wavelength_bounds.lower;
-
         let mut sampler = RandomSampler::new();
 
         let (mut successes, mut attempts) = (0, 0);
-        let lambda = wavelength_bounds.sample(random::<f32>());
+
+        let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
 
         for _ in 0..samples_per_iteration {
             // ray is generated according to texture scale.
@@ -483,11 +408,14 @@ fn main() {
                 // diffuse emitter texture
                 Mode::Texture => {
                     // 4 possible quadrants.
-                    let (rx, ry) = (random::<f32>() * 2.0 - 1.0, random::<f32>() * 2.0 - 1.0);
+                    let (rx, ry) = (
+                        sampler.draw_1d().x * 2.0 - 1.0,
+                        sampler.draw_1d().x * 2.0 - 1.0,
+                    );
 
                     let (r, phi) = (
-                        random::<f32>().sqrt() * lens_assembly.lenses[0].housing_radius,
-                        random::<f32>() * TAU,
+                        sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
+                        sampler.draw_1d().x * TAU,
                     );
 
                     let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
@@ -502,8 +430,8 @@ fn main() {
                     // 4 quadrants.
 
                     let (r, phi) = (
-                        random::<f32>().sqrt() * texture_scale,
-                        random::<f32>() * TAU,
+                        sampler.draw_1d().x.sqrt() * texture_scale,
+                        sampler.draw_1d().x * TAU,
                     );
 
                     let (px, py) = (r * phi.cos(), r * phi.sin());
@@ -514,8 +442,8 @@ fn main() {
                     // 4 quadrants.
 
                     let (r, phi) = (
-                        random::<f32>().sqrt() * texture_scale,
-                        random::<f32>() * TAU,
+                        sampler.draw_1d().x.sqrt() * texture_scale,
+                        sampler.draw_1d().x * TAU,
                     );
 
                     let (dx, dy) = (r * phi.cos(), r * phi.sin());

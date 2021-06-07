@@ -26,14 +26,13 @@ use rand::prelude::*;
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
 
-use std::fs::File;
 use std::io::prelude::*;
+use std::{collections::HashMap, fs::File};
 
 use std::f32::{
     consts::{SQRT_2, TAU},
     EPSILON,
 };
-
 
 pub fn circular_aperture(aperture_radius: f32, ray: Ray) -> bool {
     ray.origin.x().hypot(ray.origin.y()) > aperture_radius
@@ -124,27 +123,6 @@ mod test {
     use super::*;
     //     #[test]
     //     fn test() {
-    //         //     let lines = "# whatever
-    //         // 65.22    9.60  N-SSK8 1.5 50 24.0
-    //         // -62.03   4.20  N-SF10 1.5 50 24.0
-    //         // -1240.67 5.00  air           24.0
-    //         // 100000  105.00  iris          20.0"
-    //         //         .lines();
-    //         let spec = "164.12		10.99				SF5			1.673	32.2	54
-    // 559.28		0.23				air							54
-    // 100.12		11.45				BAF10		1.67	47.1    51
-    // 213.54		0.23				air							51
-    // 58.04		22.95				LAK9		1.691	54.7	41
-    // 2551		2.58				SF5			1.673	32.2	41
-    // 32.39		15.66				air							27
-    // 10000		15.00				IRIS						25.5
-    // -40.42		2.74				SF15		1.699	30.1	25
-    // 192.98		27.92				SK16		1.62	60.3	36
-    // -55.53		0.23				air							36
-    // 192.98		7.98				LAK9		1.691	54.7	35
-    // -225.28		0.23				air							35
-    // 175.1		8.48				LAK9		1.691	54.7	35
-    // -203.54		55.742				air							35";
     //         let (lenses, last_ior, last_vno) = parse_lenses_from(spec);
     //         let assembly = LensAssembly::new(&lenses);
 
