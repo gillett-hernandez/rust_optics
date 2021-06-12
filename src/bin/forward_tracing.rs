@@ -20,18 +20,39 @@ pub enum Mode {
     PinLight,
     Direction,
 }
+
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+struct Opt {
+    #[structopt(short, default_value = "800")]
+    pub width: usize,
+
+    #[structopt(short, default_value = "800")]
+    pub height: usize,
+
+    #[structopt(long, default_value = "22")]
+    pub threads: usize,
+
+    #[structopt(long)]
+    pub lens: String,
+}
+
 fn main() {
-    const WINDOW_WIDTH: usize = 800;
-    const WINDOW_HEIGHT: usize = 800;
+    let opt = Opt::from_args();
+    println!("{:?}", opt);
+    let window_width = opt.width;
+    let window_height = opt.height;
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(22 as usize)
+        .num_threads(opt.threads)
         .build_global()
         .unwrap();
     let mut window = Window::new(
         "forward tracing",
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
+        window_width,
+        window_height,
         WindowOptions {
             scale: Scale::X1,
             ..WindowOptions::default()
@@ -41,8 +62,8 @@ fn main() {
         panic!("{}", e);
     });
 
-    let mut film = Film::new(WINDOW_WIDTH, WINDOW_HEIGHT, XYZColor::BLACK);
-    let mut window_pixels = Film::new(WINDOW_WIDTH, WINDOW_HEIGHT, 0u32);
+    let mut film = Film::new(window_width, window_height, XYZColor::BLACK);
+    let mut window_pixels = Film::new(window_width, window_height, 0u32);
 
     // Limit to max ~144 fps update rate
     window.limit_update_rate(Some(std::time::Duration::from_micros(6944)));
@@ -51,7 +72,7 @@ fn main() {
 
     let frame_dt = 6944.0 / 1000000.0;
 
-    let mut camera_file = File::open("data/cameras/kreitzer_telephoto.txt").unwrap();
+    let mut camera_file = File::open(format!("data/cameras/{}.txt", opt.lens)).unwrap();
     let mut camera_spec = String::new();
     camera_file.read_to_string(&mut camera_spec).unwrap();
 
@@ -295,7 +316,7 @@ fn main() {
             std::thread::sleep(pause_duration);
 
             window
-                .update_with_buffer(&window_pixels.buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
+                .update_with_buffer(&window_pixels.buffer, window_width, window_height)
                 .unwrap();
             continue;
         }
@@ -506,7 +527,7 @@ fn main() {
                 *v = rgb_to_u32((255.0 * r) as u8, (255.0 * g) as u8, (255.0 * b) as u8);
             });
         window
-            .update_with_buffer(&window_pixels.buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
+            .update_with_buffer(&window_pixels.buffer, window_width, window_height)
             .unwrap();
     }
 }
