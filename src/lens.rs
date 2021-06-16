@@ -230,7 +230,7 @@ impl LensAssembly {
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
-        G: FnMut(Ray),
+        G: FnMut(Ray, f32),
     {
         assert!(self.lenses.len() > 0);
         let mut error = 0;
@@ -248,7 +248,7 @@ impl LensAssembly {
         // let mut jacobian = f32x4::splat(1.0);
         ray.origin = ray.point_at_parameter(t);
         for (k, lens) in self.lenses.iter().rev().enumerate() {
-            func(ray);
+            func(ray, intensity);
             let r = -lens.radius;
             let thickness = lens.thickness_at(zoom);
             position += thickness;
@@ -323,7 +323,7 @@ impl LensAssembly {
     where
         F: Fn(Ray) -> (bool, bool),
     {
-        self.trace_forward_w_callback(zoom, input, atmosphere_ior, aperture_hook, |r| {})
+        self.trace_forward_w_callback(zoom, input, atmosphere_ior, aperture_hook, |r, t| {})
     }
 
     // evaluate scene to sensor. input ray must be facing away from the camera.
@@ -337,7 +337,7 @@ impl LensAssembly {
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
-        G: FnMut(Ray),
+        G: FnMut(Ray, f32),
     {
         assert!(self.lenses.len() > 0);
         let mut error = 0;
@@ -358,7 +358,7 @@ impl LensAssembly {
         }
         // iterating from first to last. since the first interface is the "last" one when tracing from the sensor.
         for (_k, lens) in self.lenses.iter().enumerate() {
-            func(ray);
+            func(ray, intensity);
             let r = lens.radius;
 
             let dist = lens.thickness_at(zoom);
@@ -437,7 +437,7 @@ impl LensAssembly {
     where
         F: Fn(Ray) -> (bool, bool),
     {
-        self.trace_reverse_w_callback(zoom, input, atmosphere_ior, aperture_hook, |r| {})
+        self.trace_reverse_w_callback(zoom, input, atmosphere_ior, aperture_hook, |r, t| {})
     }
 }
 

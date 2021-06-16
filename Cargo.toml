@@ -20,6 +20,7 @@ math =  { git = "https://github.com/gillett-hernandez/rust_cg_math" }
 exr = "0.9.0"
 structopt = { version = "0.3", features = [ "paw" ] }
 paw = "1.0"
+line_drawing = "0.8.0"
 
 [build-dependencies]
 serde = { version = "1.0.106", features = ["derive"] }
