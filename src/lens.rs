@@ -244,11 +244,12 @@ impl LensAssembly {
         let total_thickness = self.total_thickness_at(zoom);
         let mut position = -total_thickness;
         let t = (position - ray.origin.z()) / (ray.direction.z());
+
+        func(ray, intensity);
         // compute jacobian
         // let mut jacobian = f32x4::splat(1.0);
         ray.origin = ray.point_at_parameter(t);
         for (k, lens) in self.lenses.iter().rev().enumerate() {
-            func(ray, intensity);
             let r = -lens.radius;
             let thickness = lens.thickness_at(zoom);
             position += thickness;
@@ -268,11 +269,11 @@ impl LensAssembly {
                     }
                 }
             }
-            let res: (Ray, Vec3);
+            let trace_result: (Ray, Vec3);
             if lens.anamorphic {
-                res = trace_cylindrical(ray, r, position + r, lens.housing_radius).ok()?;
+                trace_result = trace_cylindrical(ray, r, position + r, lens.housing_radius).ok()?;
             } else if lens.aspheric > 0 {
-                res = trace_aspherical(
+                trace_result = trace_aspherical(
                     ray,
                     r,
                     position + r,
@@ -282,15 +283,19 @@ impl LensAssembly {
                 )
                 .ok()?;
             } else {
-                res = trace_spherical(ray, r, position + r, lens.housing_radius).ok()?;
+                trace_result = trace_spherical(ray, r, position + r, lens.housing_radius).ok()?;
             }
-            ray = res.0;
-            let normal = res.1;
+
+            ray.time = (trace_result.0.origin - ray.origin).norm();
+            func(ray, intensity);
+            ray = trace_result.0;
+            let normal = trace_result.1;
             let n2 = if k > 0 {
                 spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
             } else {
                 atmosphere_ior
             };
+
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
             let res = refract(n1, n2, normal, ray.direction);
             ray.direction = res.0;
@@ -352,13 +357,21 @@ impl LensAssembly {
         ray.origin = Point3::from(-Vec3::from(ray.origin));
         ray.direction = -ray.direction;
         let t = (-ray.origin.z()) / (ray.direction.z());
+        ray.time = t;
+        func(
+            Ray::new_with_time(
+                Point3::from(-Vec3::from(ray.origin)),
+                ray.direction * -1.0,
+                ray.time,
+            ),
+            intensity,
+        );
         ray.origin = ray.point_at_parameter(t);
         if self.debug_mode {
             println!("setting ray to {:?}", ray);
         }
         // iterating from first to last. since the first interface is the "last" one when tracing from the sensor.
         for (_k, lens) in self.lenses.iter().enumerate() {
-            func(ray, intensity);
             let r = lens.radius;
 
             let dist = lens.thickness_at(zoom);
@@ -399,18 +412,29 @@ impl LensAssembly {
             if self.debug_mode {
                 println!("ray is now {:?}", ray);
             }
-            ray = trace_result.0;
+            let t = (trace_result.0.origin - ray.origin).norm();
+            ray.time = t;
+
             let normal = trace_result.1;
 
             let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
-            let refract_result = refract(n1, n2, -normal, ray.direction);
+            let refract_result = refract(n1, n2, -normal, trace_result.0.direction);
+
+            func(
+                Ray::new_with_time(
+                    Point3::from(-Vec3::from(ray.origin)),
+                    ray.direction * -1.0,
+                    ray.time,
+                ),
+                intensity,
+            );
+            intensity *= refract_result.1;
+            ray = trace_result.0;
             ray.direction = refract_result.0;
             if self.debug_mode {
                 println!("ray is now {:?}", ray);
             }
-
-            intensity *= refract_result.1;
 
             if intensity < INTENSITY_EPS {
                 error |= 8;
