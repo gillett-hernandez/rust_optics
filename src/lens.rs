@@ -10,7 +10,7 @@ pub use crate::math::{
 };
 use crate::parse_lenses_from;
 
-const INTENSITY_EPS: f32 = 0.0001;
+const INTENSITY_EPS: f32 = 0.000001;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LensType {
@@ -243,12 +243,13 @@ impl LensAssembly {
         let mut intensity = 1.0;
         let total_thickness = self.total_thickness_at(zoom);
         let mut position = -total_thickness;
-        let t = (position - ray.origin.z()) / (ray.direction.z());
+        let mut rays = Vec::new();
 
-        func(ray, intensity);
+        // func(ray, intensity);
+        rays.push((ray, intensity));
         // compute jacobian
         // let mut jacobian = f32x4::splat(1.0);
-        ray.origin = ray.point_at_parameter(t);
+        // ray.origin = ray.point_at_parameter(t);
         for (k, lens) in self.lenses.iter().rev().enumerate() {
             let r = -lens.radius;
             let thickness = lens.thickness_at(zoom);
@@ -256,16 +257,25 @@ impl LensAssembly {
             if lens.lens_type == LensType::Aperture {
                 match aperture_hook(ray) {
                     (false, true) => {
-                        // not blocked by aperture, but still should return early
+                        // not blocked by aperture (maybe exited assembly), but still should return early
                         return Some(Output {
                             ray,
                             tau: intensity,
                         });
                     }
-                    (false, false) => {}
-                    (true, _) => {
+                    (false, false) => {
+                        // not blocked by aperture, should continue
+                    }
+                    (true, false) => {
                         // blocked by aperture (and so no need to trace more) or should return early
                         return None;
+                    }
+                    (true, true) => {
+                        // blocked by aperture and should return the ray.
+                        return Some(Output {
+                            ray,
+                            tau: intensity,
+                        });
                     }
                 }
             }
@@ -287,7 +297,8 @@ impl LensAssembly {
             }
 
             ray.time = (trace_result.0.origin - ray.origin).norm();
-            func(ray, intensity);
+            rays.push((ray, intensity));
+            // func(ray, intensity);
             ray = trace_result.0;
             let normal = trace_result.1;
             let n2 = if k > 0 {
@@ -311,6 +322,9 @@ impl LensAssembly {
             ray.direction = ray.direction.normalized();
             debug_assert!(ray.direction.0.is_finite().all(), "{:?}", ray.direction);
             n1 = n2;
+        }
+        for (ray, intensity) in rays {
+            func(ray, intensity);
         }
         Some(Output {
             ray,
@@ -349,34 +363,35 @@ impl LensAssembly {
         let mut n1 = atmosphere_ior;
         let mut ray = input.ray;
         let mut intensity = 1.0;
-        let mut distsum = 0.0;
+        let mut position = 0.0;
 
         if self.debug_mode {
             println!("ray was {:?}", ray);
         }
         ray.origin = Point3::from(-Vec3::from(ray.origin));
         ray.direction = -ray.direction;
-        let t = (-ray.origin.z()) / (ray.direction.z());
-        ray.time = t;
-        func(
-            Ray::new_with_time(
-                Point3::from(-Vec3::from(ray.origin)),
-                ray.direction * -1.0,
-                ray.time,
-            ),
-            intensity,
-        );
-        ray.origin = ray.point_at_parameter(t);
+        // let t = (-ray.origin.z()) / (ray.direction.z());
+        // ray.time = t;
+
+        let mut rays = Vec::new();
+        rays.push((ray, intensity));
+        // func(
+        //     Ray::new_with_time(
+        //         Point3::from(-Vec3::from(ray.origin)),
+        //         ray.direction * -1.0,
+        //         ray.time,
+        //     ),
+        //     intensity,
+        // );
         if self.debug_mode {
             println!("setting ray to {:?}", ray);
         }
         // iterating from first to last. since the first interface is the "last" one when tracing from the sensor.
         for (_k, lens) in self.lenses.iter().enumerate() {
-            let r = lens.radius;
+            let r = -lens.radius;
 
-            let dist = lens.thickness_at(zoom);
+            let thickness = lens.thickness_at(zoom);
 
-            distsum += dist;
             if lens.lens_type == LensType::Aperture {
                 match aperture_hook(ray) {
                     (false, true) => {
@@ -386,28 +401,37 @@ impl LensAssembly {
                             tau: intensity,
                         });
                     }
-                    (false, false) => {}
-                    (true, _) => {
+                    (false, false) => {
+                        // not blocked by aperture, should continue
+                    }
+                    (true, false) => {
                         // blocked by aperture (and so no need to trace more) or should return early
                         return None;
+                    }
+                    (true, true) => {
+                        // blocked by aperture and should return the ray.
+                        return Some(Output {
+                            ray,
+                            tau: intensity,
+                        });
                     }
                 }
             }
             let trace_result: (Ray, Vec3);
             if lens.anamorphic {
-                trace_result = trace_cylindrical(ray, r, distsum - r, lens.housing_radius).ok()?;
+                trace_result = trace_cylindrical(ray, r, position - r, lens.housing_radius).ok()?;
             } else if lens.aspheric > 0 {
                 trace_result = trace_aspherical(
                     ray,
                     r,
-                    distsum - r,
+                    position - r,
                     lens.aspheric,
                     lens.correction,
                     lens.housing_radius,
                 )
                 .ok()?;
             } else {
-                trace_result = trace_spherical(ray, r, distsum - r, lens.housing_radius).ok()?;
+                trace_result = trace_spherical(ray, r, position - r, lens.housing_radius).ok()?;
             }
             if self.debug_mode {
                 println!("ray is now {:?}", ray);
@@ -421,17 +445,19 @@ impl LensAssembly {
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
             let refract_result = refract(n1, n2, -normal, trace_result.0.direction);
 
-            func(
-                Ray::new_with_time(
-                    Point3::from(-Vec3::from(ray.origin)),
-                    ray.direction * -1.0,
-                    ray.time,
-                ),
-                intensity,
-            );
+            rays.push((ray, intensity));
+            // func(
+            //     Ray::new_with_time(
+            //         Point3::from(-Vec3::from(ray.origin)),
+            //         ray.direction * -1.0,
+            //         ray.time,
+            //     ),
+            //     intensity,
+            // );
+
             intensity *= refract_result.1;
             ray = trace_result.0;
-            ray.direction = refract_result.0;
+            ray.direction = refract_result.0.normalized();
             if self.debug_mode {
                 println!("ray is now {:?}", ray);
             }
@@ -443,8 +469,20 @@ impl LensAssembly {
                 return None;
             }
             n1 = n2;
+            position += thickness;
         }
         // finished tracing, re-transform ray back to world space.
+
+        for (ray, intensity) in rays {
+            func(
+                Ray::new_with_time(
+                    Point3::from(-Vec3::from(ray.origin)),
+                    ray.direction * -1.0,
+                    ray.time,
+                ),
+                intensity,
+            );
+        }
         ray = Ray::new(Point3::from(-Vec3::from(ray.origin)), ray.direction * -1.0);
         Some(Output {
             ray,

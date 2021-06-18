@@ -1,4 +1,8 @@
-use std::{f32::consts::TAU, fs::File, io::Read};
+use std::{
+    f32::consts::{PI, SQRT_2, TAU},
+    fs::File,
+    io::Read,
+};
 
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
@@ -8,9 +12,12 @@ use structopt::StructOpt;
 extern crate line_drawing;
 
 use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
+use crate::math::{
+    random_cosine_direction, Point3, Ray, Sample2D, SingleWavelength, Vec3, XYZColor,
+};
 use crate::math::{Bounds1D, Bounds2D};
-use crate::math::{Point3, Ray, SingleWavelength, Vec3, XYZColor};
 use film::Film;
+use lens_sampler::RadialSampler;
 use optics::*;
 use parse::*;
 
@@ -157,8 +164,8 @@ where
 
 #[derive(Debug, Copy, Clone)]
 enum RayGenerationMode {
-    FromSensor,
-    FromScene,
+    FromSensor { forced_flat: bool },
+    FromScene { forced_flat: bool },
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -179,6 +186,7 @@ fn main() {
     println!("{:?}", opt);
     let window_width = opt.width;
     let window_height = opt.height;
+    let aspect_wh = window_width as f32 / window_height as f32; // for instance 16 / 9
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(opt.threads)
@@ -206,9 +214,11 @@ fn main() {
     let mut aperture_radius = original_aperture_radius / 3.0; // start with small aperture
     let mut lens_zoom = 0.0;
     let mut sensor_pos = -lens_assembly.total_thickness_at(lens_zoom);
-    let mut wall_position = 300.0;
-    let mut sensor_size = 35.0;
+    let mut wall_position = 80.0;
+    let sensor_size = 35.0;
+    let mut sensor_mult = 1.0;
     let mut texture_scale = 30.0;
+    let mut film_lateral_offset = 0.0;
 
     let max_lens_radius = lens_assembly
         .lenses
@@ -224,6 +234,7 @@ fn main() {
     let calculated_wh_aspect = view_bounds.x.span() / view_bounds.y.span();
     let mut view_zoom = 1.0;
 
+    view_zoom *= calculated_wh_aspect / aspect_wh;
     let mut projection_mode = ProjectionMode::Orthogonal {
         scale: max_lens_radius * view_zoom,
         origin: Point3::new(0.0, 0.0, -lens_depth / 2.0),
@@ -236,7 +247,6 @@ fn main() {
 
     let width = film.width;
     let height = film.height;
-    let aspect_wh = width as f32 / height as f32; // for instance 16 / 9
     println!(
         "suggested window sizes: {} by {} or {} by {}",
         (height as f32 * calculated_wh_aspect) as usize,
@@ -272,23 +282,24 @@ fn main() {
 
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
-    // let direction_cache_radius_bins = 512;
-    // let direction_cache_wavelength_bins = 512;
+    let direction_cache_radius_bins = 512;
+    let direction_cache_wavelength_bins = 512;
 
-    // let mut direction_cache = RadialSampler::new(
-    //     SQRT_2 * sensor_size / 2.0, // diagonal.
-    //     direction_cache_radius_bins,
-    //     direction_cache_wavelength_bins,
-    //     wavelength_bounds,
-    //     sensor_pos,
-    //     &lens_assembly,
-    //     lens_zoom,
-    //     |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
-    //     heat_bias,
-    //     sensor_size,
-    // );
+    let mut direction_cache = RadialSampler::new(
+        SQRT_2 * sensor_size / 2.0, // diagonal.
+        direction_cache_radius_bins,
+        direction_cache_wavelength_bins,
+        wavelength_bounds,
+        sensor_pos,
+        &lens_assembly,
+        lens_zoom,
+        |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
+        heat_bias,
+        sensor_size,
+    );
 
-    let ray_generation_mode = RayGenerationMode::FromScene;
+    // let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
+    let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
 
     let mut last_pressed_hotkey = Key::A;
     let mut wavelength_sweep: f32 = 0.0;
@@ -371,7 +382,7 @@ fn main() {
                 Key::E => {
                     // film size.
                     println!("mode switched to film size mode");
-                    println!("{:?}", sensor_size);
+                    println!("{:?}", sensor_size * sensor_mult);
                     last_pressed_hotkey = Key::E;
                 }
                 Key::P => {
@@ -413,20 +424,45 @@ fn main() {
                     total_samples = 0;
                     println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
                     sensor_pos += 1.0 * config_direction;
+
                     println!(
                         "{:?}, {:?}",
                         sensor_pos,
                         lens_assembly.total_thickness_at(lens_zoom)
                     );
+
+                    // if let ProjectionMode::Orthogonal {
+                    //     normal, origin, up, ..
+                    // } = projection_mode
+                    // {
+                    //     projection_mode = ProjectionMode::Orthogonal {
+                    //         scale: view_zoom * max_lens_radius,
+                    //         normal,
+                    //         origin,
+                    //         up,
+                    //     };
+                    // }
                 }
                 Key::W => {
                     // Wall
 
                     clear_film = true;
                     total_samples = 0;
-                    wall_position += 10.0 * config_direction;
+                    wall_position += 1.0 * config_direction;
                     println!("{:?}", wall_position);
                     println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
+
+                    // if let ProjectionMode::Orthogonal {
+                    //     scale, normal, origin, up
+                    // } = projection_mode
+                    // {
+                    //     projection_mode = ProjectionMode::Orthogonal {
+                    //         scale: view_zoom * max_lens_radius,
+                    //         normal,
+                    //         origin,
+                    //         up,
+                    //     };
+                    // }
                 }
                 Key::H => {
                     // Heat
@@ -435,8 +471,9 @@ fn main() {
                 }
                 Key::R => {
                     // wavelength sweep
-                    wavelength_sweep_speed *= 1.1f32.powf(config_direction);
-                    println!("{:?}", wavelength_sweep_speed);
+                    // wavelength_sweep_speed *= 1.1f32.powf(config_direction);
+                    film_lateral_offset += 1.0 * config_direction;
+                    println!("film lateral offset = {:?}%", film_lateral_offset);
                 }
                 Key::C => {
                     // heat cap
@@ -452,7 +489,7 @@ fn main() {
                     clear_film = true;
                     clear_direction_cache = true;
                     total_samples = 0;
-                    view_zoom += 0.01 * config_direction;
+                    view_zoom *= 1.1f32.powf(config_direction);
                     if let ProjectionMode::Orthogonal {
                         normal, origin, up, ..
                     } = projection_mode
@@ -484,8 +521,8 @@ fn main() {
                     clear_film = true;
                     clear_direction_cache = true;
                     total_samples = 0;
-                    sensor_size *= 1.1f32.powf(config_direction);
-                    println!("{:?}", sensor_size);
+                    sensor_mult *= 1.1f32.powf(config_direction);
+                    println!("{:?}", sensor_size * sensor_mult);
                 }
                 _ => {}
             }
@@ -529,18 +566,18 @@ fn main() {
                 .for_each(|e| *e = XYZColor::BLACK)
         }
         if clear_direction_cache {
-            // direction_cache = RadialSampler::new(
-            //     SQRT_2 * sensor_size / 2.0, // diagonal.
-            //     direction_cache_radius_bins,
-            //     direction_cache_wavelength_bins,
-            //     wavelength_bounds,
-            //     sensor_pos,
-            //     &lens_assembly,
-            //     lens_zoom,
-            //     |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
-            //     heat_bias,
-            //     sensor_size,
-            // );
+            direction_cache = RadialSampler::new(
+                SQRT_2 * sensor_size / 2.0, // diagonal.
+                direction_cache_radius_bins,
+                direction_cache_wavelength_bins,
+                wavelength_bounds,
+                sensor_pos,
+                &lens_assembly,
+                lens_zoom,
+                |aperture_radius, ray| bladed_aperture(aperture_radius, 6, ray),
+                heat_bias,
+                sensor_size,
+            );
         }
 
         let srgb_tonemapper = sRGB::new(&film, 1.0);
@@ -595,262 +632,406 @@ fn main() {
 
         total_samples += samples_per_iteration;
 
-        let mut sampler = RandomSampler::new();
-
         let (mut successes, mut attempts) = (0, 0);
 
         let mut collected_rays: Vec<(Ray, XYZColor)> = Vec::new();
         match ray_generation_mode {
-            RayGenerationMode::FromSensor => {
-                let mut rays = Vec::new();
-                for _ in 0..samples_per_iteration {
-                    let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
-                    // ray is generated according to texture scale.
-                    let ray = match mode {
-                        // diffuse emitter texture
-                        Mode::Texture => {
-                            // 4 possible quadrants.
-                            let (rx, ry) = (
-                                sampler.draw_1d().x * 2.0 - 1.0,
-                                sampler.draw_1d().x * 2.0 - 1.0,
-                            );
+            RayGenerationMode::FromSensor { forced_flat } => {
+                match mode {
+                    Mode::Texture => {
+                        let mut rays: Vec<(Ray, XYZColor)> =
+                            (0..opt.threads)
+                                .into_par_iter()
+                                .flat_map(|t| {
+                                    let mut rays = Vec::new();
+                                    let mut sampler = RandomSampler::new();
+                                    for _ in 0..(samples_per_iteration / opt.threads) {
+                                        let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
+                                        // ray is generated according to texture scale.
+                                        let ray = if forced_flat {
+                                            let point = Point3::new(
+                                                (sampler.draw_1d().x - 0.5)
+                                                    * sensor_size
+                                                    * sensor_mult
+                                                    + film_lateral_offset,
+                                                0.0,
+                                                sensor_pos,
+                                            );
+                                            // let mut v = random_cosine_direction(sampler.draw_2d());
+                                            // v.0 = v.0.replace(1, 0.0);
+                                            let mut v = direction_cache.sample(
+                                                lambda,
+                                                point,
+                                                sampler.draw_2d(),
+                                                sampler.draw_1d(),
+                                            );
+                                            v.0 = v.0.replace(1, 0.0);
+                                            v = v.normalized();
+                                            Ray::new(point, v)
+                                        } else {
+                                            let Sample2D { x, y } = sampler.draw_2d();
+                                            let point = Point3::new(
+                                                (x - 0.5) * sensor_size * sensor_mult
+                                                    + film_lateral_offset,
+                                                (y - 0.5) * sensor_size * sensor_mult,
+                                                sensor_pos,
+                                            );
+                                            // let v = random_cosine_direction(sampler.draw_2d());
+                                            let v = direction_cache.sample(
+                                                lambda,
+                                                point,
+                                                sampler.draw_2d(),
+                                                sampler.draw_1d(),
+                                            );
 
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
-                                sampler.draw_1d().x * TAU,
-                            );
+                                            Ray::new(point, v)
+                                        };
 
-                            // if forced_flat {
-                            //     phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
-                            // }
+                                        // println!("{:?}", ray);
 
-                            let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
-                            let point_on_texture =
-                                Point3::new(texture_scale * rx, texture_scale * ry, wall_position);
-                            let v = (point_on_lens - point_on_texture).normalized();
+                                        // do actual tracing through lens for film sample
 
-                            Ray::new(point_on_texture, v)
-                        }
-                        // parallel light
-                        Mode::SpotLight => {
-                            // 4 quadrants.
-
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * texture_scale,
-                                sampler.draw_1d().x * TAU,
-                            );
-
-                            let (px, py) = (r * phi.cos(), r * phi.sin());
-
-                            Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
-                        }
-                        Mode::PinLight => {
-                            // 4 quadrants.
-
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * texture_scale,
-                                sampler.draw_1d().x * TAU,
-                            );
-
-                            let (dx, dy) = (r * phi.cos(), r * phi.sin());
-                            let (px, py) = (0.0, 0.0);
-
-                            Ray::new(
-                                Point3::new(px, py, wall_position),
-                                Vec3::new(dx, dy, -1.0).normalized(),
-                            )
-                        }
-                    };
-                    // println!("{:?}", ray);
-
-                    attempts += 1;
-                    // do actual tracing through lens for film sample
-
-                    let result = lens_assembly.trace_forward_w_callback(
-                        lens_zoom,
-                        &Input { ray, lambda },
-                        1.04,
-                        |e| (bladed_aperture(aperture_radius, 6, e), false),
-                        |ray, tau| {
-                            rays.push((
-                                ray,
-                                XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                            ))
-                        },
-                    );
-                    if let Some(Output {
-                        ray: mut sensor_ray,
-                        mut tau,
-                    }) = result
-                    {
-                        successes += 1;
-
-                        sensor_ray.time = if let Some(point) = ray_plane_intersection(
-                            sensor_ray,
-                            Point3::new(0.0, 0.0, -sensor_pos),
-                            Vec3::Z,
-                        ) {
-                            if point.x().abs() < sensor_size / 2.0
-                                && point.y().abs() < sensor_size / 2.0
-                            {
-                                (point - sensor_ray.origin).norm()
-                            } else {
-                                // tau = 0.0;
-                                100000.0
-                            }
-                        } else {
-                            tau = 0.0;
-                            100000.0
-                        };
-                        rays.push((
-                            sensor_ray,
-                            XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                        ));
-                        // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
-                        // let point_at_film = pupil_ray.point_at_parameter(t);
-                        // let uv = (
-                        //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
-                        //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
-                        // );
-                        // film.write_at(
-                        //     (uv.0 * window_width as f32) as usize,
-                        //     (uv.1 * window_height as f32) as usize,
-                        //     film.at(
-                        //         (uv.0 * window_width as f32) as usize,
-                        //         (uv.1 * window_height as f32) as usize,
-                        //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                        // );
+                                        let result = lens_assembly.trace_forward_w_callback(
+                                            lens_zoom,
+                                            &Input { ray, lambda },
+                                            1.04,
+                                            |e| (bladed_aperture(aperture_radius, 6, e), false),
+                                            |ray, tau| {
+                                                // the following if condition hides rays that don't have their time set. applicable when rays exit the assembly from some surface that isn't the front iris.
+                                                if ray.time > 0.0 {
+                                                    rays.push((
+                                                        ray,
+                                                        XYZColor::from(SingleWavelength::new(
+                                                            lambda,
+                                                            tau.into(),
+                                                        )),
+                                                    ));
+                                                }
+                                            },
+                                        );
+                                        if let Some(Output {
+                                            ray: mut pupil_ray,
+                                            mut tau,
+                                        }) = result
+                                        {
+                                            pupil_ray.time = if let Some(point) =
+                                                ray_plane_intersection(
+                                                    pupil_ray,
+                                                    Point3::new(0.0, 0.0, wall_position),
+                                                    Vec3::Z,
+                                                ) {
+                                                (point - pupil_ray.origin).norm()
+                                            } else {
+                                                // tau = 0.0;s
+                                                // flag 0
+                                                // 100000.0
+                                                0.0
+                                            };
+                                            rays.push((
+                                                pupil_ray,
+                                                XYZColor::from(SingleWavelength::new(
+                                                    lambda,
+                                                    tau.into(),
+                                                )),
+                                            ));
+                                            // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
+                                            // let point_at_film = pupil_ray.point_at_parameter(t);
+                                            // let uv = (
+                                            //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                            //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                            // );
+                                            // film.write_at(
+                                            //     (uv.0 * window_width as f32) as usize,
+                                            //     (uv.1 * window_height as f32) as usize,
+                                            //     film.at(
+                                            //         (uv.0 * window_width as f32) as usize,
+                                            //         (uv.1 * window_height as f32) as usize,
+                                            //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                                            // );
+                                        }
+                                    }
+                                    rays
+                                })
+                                .collect();
+                        collected_rays.extend(rays.drain(..));
                     }
-                    collected_rays.extend(rays.drain(..));
+                    Mode::SpotLight => {
+                        let mut rays: Vec<(Ray, XYZColor)> =
+                            (0..opt.threads)
+                                .into_par_iter()
+                                .flat_map(|t| {
+                                    let mut rays = Vec::new();
+                                    let mut sampler = RandomSampler::new();
+                                    for _ in 0..(samples_per_iteration / opt.threads) {
+                                        let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
+                                        // ray is generated according to texture scale.
+                                        let ray = if forced_flat {
+                                            let point = Point3::new(
+                                                (sampler.draw_1d().x - 0.5)
+                                                    * sensor_size
+                                                    * sensor_mult
+                                                    + film_lateral_offset,
+                                                0.0,
+                                                sensor_pos,
+                                            );
+                                            // let mut v = random_cosine_direction(sampler.draw_2d());
+                                            // v.0 = v.0.replace(1, 0.0);
+                                            // v.normalize();
+                                            // let mut v = direction_cache.sample(
+                                            //     lambda,
+                                            //     point,
+                                            //     sampler.draw_2d(),
+                                            //     sampler.draw_1d(),
+                                            // );
+                                            Ray::new(point, Vec3::Z)
+                                        } else {
+                                            let Sample2D { x, y } = sampler.draw_2d();
+                                            let point = Point3::new(
+                                                (x - 0.5) * sensor_size * sensor_mult
+                                                    + film_lateral_offset,
+                                                (y - 0.5) * sensor_size * sensor_mult,
+                                                sensor_pos,
+                                            );
+                                            // let v = random_cosine_direction(sampler.draw_2d());
+                                            // let v = direction_cache.sample(
+                                            //     lambda,
+                                            //     point,
+                                            //     sampler.draw_2d(),
+                                            //     sampler.draw_1d(),
+                                            // );
+
+                                            Ray::new(point, Vec3::Z)
+                                        };
+
+                                        // println!("{:?}", ray);
+
+                                        // do actual tracing through lens for film sample
+
+                                        let result = lens_assembly.trace_forward_w_callback(
+                                            lens_zoom,
+                                            &Input { ray, lambda },
+                                            1.04,
+                                            |e| (bladed_aperture(aperture_radius, 6, e), false),
+                                            |ray, tau| {
+                                                // the following if condition hides rays that don't have their time set. applicable when rays exit the assembly from some surface that isn't the front iris.
+                                                // flag 0
+                                                if ray.time > 0.0 {
+                                                    rays.push((
+                                                        ray,
+                                                        XYZColor::from(SingleWavelength::new(
+                                                            lambda,
+                                                            tau.into(),
+                                                        )),
+                                                    ));
+                                                }
+                                            },
+                                        );
+                                        if let Some(Output {
+                                            ray: mut pupil_ray,
+                                            mut tau,
+                                        }) = result
+                                        {
+                                            pupil_ray.time = if let Some(point) =
+                                                ray_plane_intersection(
+                                                    pupil_ray,
+                                                    Point3::new(0.0, 0.0, wall_position),
+                                                    Vec3::Z,
+                                                ) {
+                                                (point - pupil_ray.origin).norm()
+                                            } else {
+                                                // tau = 0.0;s
+                                                // flag 0
+                                                // 100000.0
+                                                0.0
+                                            };
+                                            rays.push((
+                                                pupil_ray,
+                                                XYZColor::from(SingleWavelength::new(
+                                                    lambda,
+                                                    tau.into(),
+                                                )),
+                                            ));
+                                            // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
+                                            // let point_at_film = pupil_ray.point_at_parameter(t);
+                                            // let uv = (
+                                            //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                            //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                            // );
+                                            // film.write_at(
+                                            //     (uv.0 * window_width as f32) as usize,
+                                            //     (uv.1 * window_height as f32) as usize,
+                                            //     film.at(
+                                            //         (uv.0 * window_width as f32) as usize,
+                                            //         (uv.1 * window_height as f32) as usize,
+                                            //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                                            // );
+                                        }
+                                    }
+                                    rays
+                                })
+                                .collect();
+                        collected_rays.extend(rays.drain(..));
+                    }
+                    Mode::PinLight => {}
                 }
             }
-            RayGenerationMode::FromScene => {
-                let mut rays = Vec::new();
-                for _ in 0..samples_per_iteration {
-                    let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
-                    // ray is generated according to texture scale.
-                    let ray = match mode {
-                        // diffuse emitter texture
-                        Mode::Texture => {
-                            // 4 possible quadrants.
-                            let (rx, ry) = (
-                                sampler.draw_1d().x * 2.0 - 1.0,
-                                sampler.draw_1d().x * 2.0 - 1.0,
+
+            RayGenerationMode::FromScene { forced_flat } => {
+                let mut rays: Vec<(Ray, XYZColor)> = (0..opt.threads)
+                    .into_par_iter()
+                    .flat_map(|t| {
+                        let mut rays = Vec::new();
+                        let mut sampler = RandomSampler::new();
+                        for _ in 0..(samples_per_iteration / opt.threads) {
+                            let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
+                            // ray is generated according to texture scale.
+                            let ray = match mode {
+                                // diffuse emitter texture
+                                Mode::Texture => {
+                                    // 4 possible quadrants.
+                                    let (rx, ry) = (
+                                        sampler.draw_1d().x * 2.0 - 1.0,
+                                        if forced_flat {
+                                            0.0
+                                        } else {
+                                            sampler.draw_1d().x * 2.0 - 1.0
+                                        },
+                                    );
+
+                                    let (r, mut phi) = (
+                                        sampler.draw_1d().x
+                                            * lens_assembly.lenses[0].housing_radius,
+                                        sampler.draw_1d().x * TAU,
+                                    );
+
+                                    if forced_flat {
+                                        phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
+                                    }
+
+                                    let point_on_lens =
+                                        Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
+                                    let point_on_texture = Point3::new(
+                                        texture_scale * rx,
+                                        texture_scale * ry,
+                                        wall_position,
+                                    );
+                                    let v = (point_on_lens - point_on_texture).normalized();
+
+                                    Ray::new(point_on_texture, v)
+                                }
+                                // parallel light
+                                Mode::SpotLight => {
+                                    // 4 quadrants.
+
+                                    let (r, mut phi) = (
+                                        sampler.draw_1d().x * texture_scale,
+                                        sampler.draw_1d().x * TAU,
+                                    );
+                                    if forced_flat {
+                                        phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
+                                    }
+
+                                    let (px, py) = (r * phi.cos(), r * phi.sin());
+
+                                    Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
+                                }
+                                Mode::PinLight => {
+                                    // 4 quadrants.
+
+                                    let (r, mut phi) = (
+                                        sampler.draw_1d().x
+                                            * lens_assembly.lenses[0].housing_radius,
+                                        sampler.draw_1d().x * TAU,
+                                    );
+
+                                    if forced_flat {
+                                        phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
+                                    }
+
+                                    let (px, py) = (0.0, 0.0);
+                                    let pin_point = Point3::new(px, py, wall_position);
+                                    // solve x^2 + y^2 = lens_radius^2 for x
+                                    // x = sqrt(r^2 - y^2)
+                                    // adjusted_x = sqrt(r^2 - y^2) - r
+                                    let l0r = lens_assembly.lenses[0].radius;
+                                    let hr = lens_assembly.lenses[0].housing_radius;
+                                    let depth = (l0r * l0r - hr * hr).sqrt() - l0r;
+                                    // let depth = 0.0;
+                                    let point_on_lens =
+                                        Point3::new(r * phi.cos(), r * phi.sin(), depth);
+                                    let direction = point_on_lens - pin_point;
+
+                                    // let (dx, dy) = (r * phi.cos(), r * phi.sin());
+
+                                    Ray::new(pin_point, direction)
+                                }
+                            };
+                            // println!("{:?}", ray);
+
+                            // do actual tracing through lens for film sample
+
+                            let result = lens_assembly.trace_reverse_w_callback(
+                                lens_zoom,
+                                &Input { ray, lambda },
+                                1.04,
+                                |e| (bladed_aperture(aperture_radius, 6, e), false),
+                                |ray, tau| {
+                                    rays.push((
+                                        ray,
+                                        XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                                    ))
+                                },
                             );
-
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
-                                sampler.draw_1d().x * TAU,
-                            );
-
-                            // if forced_flat {
-                            //     phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
-                            // }
-
-                            let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
-                            let point_on_texture =
-                                Point3::new(texture_scale * rx, texture_scale * ry, wall_position);
-                            let v = (point_on_lens - point_on_texture).normalized();
-
-                            Ray::new(point_on_texture, v)
-                        }
-                        // parallel light
-                        Mode::SpotLight => {
-                            // 4 quadrants.
-
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * texture_scale,
-                                sampler.draw_1d().x * TAU,
-                            );
-
-                            let (px, py) = (r * phi.cos(), r * phi.sin());
-
-                            Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
-                        }
-                        Mode::PinLight => {
-                            // 4 quadrants.
-
-                            let (r, phi) = (
-                                sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
-                                sampler.draw_1d().x * TAU,
-                            );
-
-                            // if forced_flat {
-                            //     phi = if sampler.draw_1d().x > 0.5 { PI } else { 0.0 };
-                            // }
-
-                            let (px, py) = (0.0, 0.0);
-                            let pin_point = Point3::new(px, py, wall_position);
-                            let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
-                            let direction = point_on_lens - pin_point;
-
-                            // let (dx, dy) = (r * phi.cos(), r * phi.sin());
-
-                            Ray::new(pin_point, direction)
-                        }
-                    };
-                    // println!("{:?}", ray);
-
-                    attempts += 1;
-                    // do actual tracing through lens for film sample
-
-                    let result = lens_assembly.trace_reverse_w_callback(
-                        lens_zoom,
-                        &Input { ray, lambda },
-                        1.04,
-                        |e| (bladed_aperture(aperture_radius, 6, e), false),
-                        |ray, tau| {
-                            rays.push((
-                                ray,
-                                XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                            ))
-                        },
-                    );
-                    if let Some(Output {
-                        ray: mut sensor_ray,
-                        mut tau,
-                    }) = result
-                    {
-                        successes += 1;
-
-                        sensor_ray.time = if let Some(point) = ray_plane_intersection(
-                            sensor_ray,
-                            Point3::new(0.0, 0.0, -sensor_pos),
-                            Vec3::Z,
-                        ) {
-                            if point.x().abs() < sensor_size / 2.0
-                                && point.y().abs() < sensor_size / 2.0
+                            if let Some(Output {
+                                ray: mut sensor_ray,
+                                mut tau,
+                            }) = result
                             {
-                                (point - sensor_ray.origin).norm()
-                            } else {
-                                // tau = 0.0;
-                                100000.0
+                                sensor_ray.time = if let Some(point) = ray_plane_intersection(
+                                    sensor_ray,
+                                    Point3::new(0.0, 0.0, -sensor_pos),
+                                    Vec3::Z,
+                                ) {
+                                    if point.x().abs() < sensor_size / 2.0
+                                        && point.y().abs() < sensor_size / 2.0
+                                    {
+                                        (point - sensor_ray.origin).norm()
+                                    } else {
+                                        // tau = 0.0;
+                                        // flag 0
+                                        // 0.0
+                                        10000.0
+                                    }
+                                } else {
+                                    // tau = 0.0;
+                                    // flag 0
+                                    // 0.0
+                                    10000.0
+                                };
+                                rays.push((
+                                    sensor_ray,
+                                    XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                                ));
+                                // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
+                                // let point_at_film = pupil_ray.point_at_parameter(t);
+                                // let uv = (
+                                //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
+                                // );
+                                // film.write_at(
+                                //     (uv.0 * window_width as f32) as usize,
+                                //     (uv.1 * window_height as f32) as usize,
+                                //     film.at(
+                                //         (uv.0 * window_width as f32) as usize,
+                                //         (uv.1 * window_height as f32) as usize,
+                                //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                                // );
                             }
-                        } else {
-                            tau = 0.0;
-                            100000.0
-                        };
-                        rays.push((
-                            sensor_ray,
-                            XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                        ));
-                        // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
-                        // let point_at_film = pupil_ray.point_at_parameter(t);
-                        // let uv = (
-                        //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
-                        //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
-                        // );
-                        // film.write_at(
-                        //     (uv.0 * window_width as f32) as usize,
-                        //     (uv.1 * window_height as f32) as usize,
-                        //     film.at(
-                        //         (uv.0 * window_width as f32) as usize,
-                        //         (uv.1 * window_height as f32) as usize,
-                        //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                        // );
-                    }
-                    collected_rays.extend(rays.drain(..));
-                }
+                        }
+                        rays
+                    })
+                    .collect();
+                collected_rays.extend(rays.drain(..));
             }
         }
 
@@ -870,7 +1051,8 @@ fn main() {
                     // line =
                     // y = (y2 - y1) * t + y1
                     // x = (x2 - x1) * t + x1
-                    let space_scale = r.direction.norm() / ((r.direction * normal) * normal).norm();
+                    // let space_scale = r.direction.norm() / (r.direction * normal).abs();
+                    let space_scale = 1.0;
                     let w = normal;
                     let u = w.cross(up).normalized();
                     let v = w.cross(u);
@@ -893,7 +1075,8 @@ fn main() {
 
                         replace_if(
                             &mut earliest_intersection,
-                            ray_plane_intersection(r, origin + u * scale, u).unwrap_or(cloned),
+                            ray_plane_intersection(r, origin + u * scale * aspect_wh, u)
+                                .unwrap_or(cloned),
                             condition,
                         );
                         replace_if(
@@ -903,7 +1086,8 @@ fn main() {
                         );
                         replace_if(
                             &mut earliest_intersection,
-                            ray_plane_intersection(r, origin - u * scale, u).unwrap_or(cloned),
+                            ray_plane_intersection(r, origin - u * scale * aspect_wh, u)
+                                .unwrap_or(cloned),
                             condition,
                         );
                         replace_if(
@@ -916,14 +1100,12 @@ fn main() {
                     let d_o = destination - origin;
                     let mut uv_endpoint = (d_o * u / scale, d_o * v / scale);
 
-                    uv_origin.0 =
-                        ((uv_origin.0 / aspect_wh + 1.0) / 2.0).clamp(0.0, 1.0 - std::f32::EPSILON);
-                    uv_origin.1 = ((uv_origin.1 + 1.0) / 2.0).clamp(0.0, 1.0 - std::f32::EPSILON);
+                    uv_origin.0 = (uv_origin.0 / aspect_wh + 1.0) / 2.0;
+                    uv_origin.1 = (uv_origin.1 + 1.0) / 2.0;
 
-                    uv_endpoint.0 = ((uv_endpoint.0 / aspect_wh + 1.0) / 2.0)
-                        .clamp(0.0, 1.0 - std::f32::EPSILON);
-                    uv_endpoint.1 =
-                        ((uv_endpoint.1 + 1.0) / 2.0).clamp(0.0, 1.0 - std::f32::EPSILON);
+                    uv_endpoint.0 = (uv_endpoint.0 / aspect_wh + 1.0) / 2.0;
+
+                    uv_endpoint.1 = (uv_endpoint.1 + 1.0) / 2.0;
 
                     ((uv_origin, uv_endpoint), color * space_scale)
                 }

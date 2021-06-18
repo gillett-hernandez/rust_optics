@@ -27,6 +27,9 @@ impl RadialSampler {
     where
         F: Send + Sync + Fn(f32, Ray) -> bool,
     {
+        // todo: optimize based on the requirement of partitioning the space of angles into at most 3 sets. those too high, those too low, and those just right.
+        //       basically some sort of optimization where you partition the space based on tested points, and as soon as a tested point is valid, it means that all partitions that don't contain the tested point are invalid.
+        //       
         // create film of vecs.
         let mut film = Film::new(radius_bins, wavelength_bins, f32x4::splat(0.0));
         let aperture_radius = lens_assembly.aperture_radius();
@@ -62,8 +65,8 @@ impl RadialSampler {
             }
             // expand around direction to find radius and correct centroid.
             // measured in radians.
-            let mut min_angle: f32 = 0.0;
-            let mut max_angle: f32 = 0.0;
+            let mut min_angle: f32 = f32::INFINITY;
+            let mut max_angle: f32 = f32::NEG_INFINITY;
             let mut radius = 0.0;
             let mut sum_angle = 0.0;
             let mut valid_angle_count = 0;
