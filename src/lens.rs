@@ -387,7 +387,7 @@ impl LensAssembly {
             println!("setting ray to {:?}", ray);
         }
         // iterating from first to last. since the first interface is the "last" one when tracing from the sensor.
-        for (_k, lens) in self.lenses.iter().enumerate() {
+        for (k, lens) in self.lenses.iter().enumerate() {
             let r = -lens.radius;
 
             let thickness = lens.thickness_at(zoom);
@@ -441,7 +441,11 @@ impl LensAssembly {
 
             let normal = trace_result.1;
 
-            let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
+            let n2 = if k < self.lenses.len() {
+                spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
+            } else {
+                atmosphere_ior
+            };
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
             let refract_result = refract(n1, n2, -normal, trace_result.0.direction);
 

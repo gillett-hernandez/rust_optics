@@ -299,14 +299,14 @@ fn main() {
     );
 
     // let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
-    let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
+    let ray_generation_mode = RayGenerationMode::FromScene { forced_flat: true };
+    let mut mode = Mode::SpotLight;
 
     let mut last_pressed_hotkey = Key::A;
     let mut wavelength_sweep: f32 = 0.0;
     let mut wavelength_sweep_speed = 0.001;
     let mut efficiency = 0.0;
     let efficiency_heat = 0.99;
-    let mut mode = Mode::Texture;
     let mut paused = false;
     let mut draw_mode = DrawMode::XiaolinWu;
 
@@ -933,7 +933,10 @@ fn main() {
 
                                     let (px, py) = (r * phi.cos(), r * phi.sin());
 
-                                    Ray::new(Point3::new(px, py, wall_position), -Vec3::Z)
+                                    Ray::new(
+                                        Point3::new(px + film_lateral_offset, py, wall_position),
+                                        -Vec3::Z,
+                                    )
                                 }
                                 Mode::PinLight => {
                                     // 4 quadrants.
@@ -1047,19 +1050,73 @@ fn main() {
                     origin,
                     up,
                 } => {
-                    // project so that the X axis is completely ignored.
-                    // line =
-                    // y = (y2 - y1) * t + y1
-                    // x = (x2 - x1) * t + x1
                     // let space_scale = r.direction.norm() / (r.direction * normal).abs();
                     let space_scale = 1.0;
                     let w = normal;
                     let u = w.cross(up).normalized();
                     let v = w.cross(u);
-                    let ro_o = r.origin - origin;
 
                     // starting point
-                    let mut uv_origin = (ro_o * u / scale, ro_o * v / scale);
+                    let mut uv_origin = aspect_aware_orthogonal_projection(
+                        r.origin, origin, scale, u, v, aspect_wh,
+                    );
+                    if uv_origin.0 < 0.0
+                        || uv_origin.1 < 0.0
+                        || uv_origin.1 >= 1.0
+                        || uv_origin.1 >= 1.0
+                    {
+                        // starting point outside the box
+                        // thus intersect ray with boxes and accept the closest valid point.
+                        let destination = {
+                            // compute ray plane intersection on the 4 planes that mark the bounding box.
+                            // accept the furthest valid point.
+                            let mut closest_valid_intersection: Point3 =
+                                r.point_at_parameter(100000000.0);
+                            let cloned = closest_valid_intersection.clone();
+                            let condition = |a: &Point3, b: Point3| {
+                                let buv = aspect_aware_orthogonal_projection(
+                                    b, origin, scale, u, v, aspect_wh,
+                                );
+                                (b - r.origin).norm_squared() < (*a - r.origin).norm_squared()
+                                    && buv.0 < 1.0
+                                    && buv.0 >= 0.0
+                                    && buv.1 < 1.0
+                                    && buv.1 >= 0.0
+                            };
+
+                            replace_if(
+                                &mut closest_valid_intersection,
+                                ray_plane_intersection(r, origin + u * scale * aspect_wh, u)
+                                    .unwrap_or(cloned),
+                                condition,
+                            );
+                            replace_if(
+                                &mut closest_valid_intersection,
+                                ray_plane_intersection(r, origin + v * scale, v).unwrap_or(cloned),
+                                condition,
+                            );
+                            replace_if(
+                                &mut closest_valid_intersection,
+                                ray_plane_intersection(r, origin - u * scale * aspect_wh, u)
+                                    .unwrap_or(cloned),
+                                condition,
+                            );
+                            replace_if(
+                                &mut closest_valid_intersection,
+                                ray_plane_intersection(r, origin - v * scale, v).unwrap_or(cloned),
+                                condition,
+                            );
+                            closest_valid_intersection
+                        };
+                        uv_origin = aspect_aware_orthogonal_projection(
+                            destination,
+                            origin,
+                            scale,
+                            u,
+                            v,
+                            aspect_wh,
+                        );
+                    }
 
                     // construct
 
@@ -1067,45 +1124,53 @@ fn main() {
                         r.point_at_parameter(r.time)
                     } else {
                         // compute ray plane intersection on the 4 planes that mark the bounding box.
-                        let mut earliest_intersection: Point3 = r.point_at_parameter(100000000.0);
-                        let cloned = earliest_intersection.clone();
+                        // accept the furthest valid point.
+                        let mut furthest_valid_intersection: Point3 =
+                            r.point_at_parameter(100000000.0);
+                        let cloned = furthest_valid_intersection.clone();
                         let condition = |a: &Point3, b: Point3| {
-                            (b - r.origin).norm_squared() < (*a - r.origin).norm_squared()
+                            let buv = aspect_aware_orthogonal_projection(
+                                b, origin, scale, u, v, aspect_wh,
+                            );
+                            (b - r.origin).norm_squared() > (*a - r.origin).norm_squared()
+                                && buv.0 < 1.0
+                                && buv.0 >= 0.0
+                                && buv.1 < 1.0
+                                && buv.1 >= 0.0
                         };
 
                         replace_if(
-                            &mut earliest_intersection,
+                            &mut furthest_valid_intersection,
                             ray_plane_intersection(r, origin + u * scale * aspect_wh, u)
                                 .unwrap_or(cloned),
                             condition,
                         );
                         replace_if(
-                            &mut earliest_intersection,
+                            &mut furthest_valid_intersection,
                             ray_plane_intersection(r, origin + v * scale, v).unwrap_or(cloned),
                             condition,
                         );
                         replace_if(
-                            &mut earliest_intersection,
+                            &mut furthest_valid_intersection,
                             ray_plane_intersection(r, origin - u * scale * aspect_wh, u)
                                 .unwrap_or(cloned),
                             condition,
                         );
                         replace_if(
-                            &mut earliest_intersection,
+                            &mut furthest_valid_intersection,
                             ray_plane_intersection(r, origin - v * scale, v).unwrap_or(cloned),
                             condition,
                         );
-                        earliest_intersection
+                        furthest_valid_intersection
                     };
-                    let d_o = destination - origin;
-                    let mut uv_endpoint = (d_o * u / scale, d_o * v / scale);
-
-                    uv_origin.0 = (uv_origin.0 / aspect_wh + 1.0) / 2.0;
-                    uv_origin.1 = (uv_origin.1 + 1.0) / 2.0;
-
-                    uv_endpoint.0 = (uv_endpoint.0 / aspect_wh + 1.0) / 2.0;
-
-                    uv_endpoint.1 = (uv_endpoint.1 + 1.0) / 2.0;
+                    let uv_endpoint = aspect_aware_orthogonal_projection(
+                        destination,
+                        origin,
+                        scale,
+                        u,
+                        v,
+                        aspect_wh,
+                    );
 
                     ((uv_origin, uv_endpoint), color * space_scale)
                 }

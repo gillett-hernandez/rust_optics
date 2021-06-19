@@ -59,6 +59,22 @@ pub fn bladed_aperture(aperture_radius: f32, blades: usize, ray: Ray) -> bool {
     }
 }
 
+pub fn aspect_aware_orthogonal_projection(
+    point: Point3,
+    origin: Point3,
+    scale: f32,
+    u: Vec3,
+    v: Vec3,
+    aspect_ratio: f32,
+) -> (f32, f32) {
+    let po_o = point - origin;
+    let unnormalized_uv = (po_o * u / scale / aspect_ratio, po_o * v / scale);
+    (
+        (unnormalized_uv.0 + 1.0) / 2.0,
+        (unnormalized_uv.1 + 1.0) / 2.0,
+    )
+}
+
 fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Option<Output<Ray>>> {
     let mut outputs: Vec<Option<Output<Ray>>> = Vec::new();
     let aperture_radius = 10.0;
