@@ -286,7 +286,7 @@ fn main() {
     let direction_cache_wavelength_bins = 512;
 
     let mut direction_cache = RadialSampler::new(
-        SQRT_2 * sensor_size / 2.0, // diagonal.
+        SQRT_2 * sensor_mult * sensor_size / 2.0, // diagonal.
         direction_cache_radius_bins,
         direction_cache_wavelength_bins,
         wavelength_bounds,
@@ -298,8 +298,8 @@ fn main() {
         sensor_size,
     );
 
-    // let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
-    let ray_generation_mode = RayGenerationMode::FromScene { forced_flat: true };
+    let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: false };
+    // let ray_generation_mode = RayGenerationMode::FromScene { forced_flat: true };
     let mut mode = Mode::SpotLight;
 
     let mut last_pressed_hotkey = Key::A;
@@ -486,9 +486,9 @@ fn main() {
                     println!("{:?}", texture_scale);
                 }
                 Key::Z => {
-                    clear_film = true;
-                    clear_direction_cache = true;
-                    total_samples = 0;
+                    // clear_film = true;
+                    // clear_direction_cache = true;
+                    // total_samples = 0;
                     view_zoom *= 1.1f32.powf(config_direction);
                     if let ProjectionMode::Orthogonal {
                         normal, origin, up, ..
@@ -567,7 +567,7 @@ fn main() {
         }
         if clear_direction_cache {
             direction_cache = RadialSampler::new(
-                SQRT_2 * sensor_size / 2.0, // diagonal.
+                SQRT_2 * sensor_mult * sensor_size / 2.0, // diagonal.
                 direction_cache_radius_bins,
                 direction_cache_wavelength_bins,
                 wavelength_bounds,
@@ -642,7 +642,7 @@ fn main() {
                         let mut rays: Vec<(Ray, XYZColor)> =
                             (0..opt.threads)
                                 .into_par_iter()
-                                .flat_map(|t| {
+                                .flat_map(|_t| {
                                     let mut rays = Vec::new();
                                     let mut sampler = RandomSampler::new();
                                     for _ in 0..(samples_per_iteration / opt.threads) {
@@ -734,20 +734,6 @@ fn main() {
                                                     tau.into(),
                                                 )),
                                             ));
-                                            // let t = (sensor_pos - pupil_ray.origin.z()) / pupil_ray.direction.z();
-                                            // let point_at_film = pupil_ray.point_at_parameter(t);
-                                            // let uv = (
-                                            //     (((point_at_film.x() / sensor_size) + 1.0) / 2.0) % 1.0,
-                                            //     (((point_at_film.y() / sensor_size) + 1.0) / 2.0) % 1.0,
-                                            // );
-                                            // film.write_at(
-                                            //     (uv.0 * window_width as f32) as usize,
-                                            //     (uv.1 * window_height as f32) as usize,
-                                            //     film.at(
-                                            //         (uv.0 * window_width as f32) as usize,
-                                            //         (uv.1 * window_height as f32) as usize,
-                                            //     ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                                            // );
                                         }
                                     }
                                     rays
