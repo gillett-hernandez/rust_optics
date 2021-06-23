@@ -374,7 +374,7 @@ impl LensAssembly {
         // ray.time = t;
 
         let mut rays = Vec::new();
-        rays.push((ray, intensity));
+        // rays.push((ray, intensity));
         // func(
         //     Ray::new_with_time(
         //         Point3::from(-Vec3::from(ray.origin)),

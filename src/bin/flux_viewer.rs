@@ -23,22 +23,6 @@ use parse::*;
 
 use tonemap::{sRGB, Tonemapper};
 
-#[derive(Debug, StructOpt)]
-#[structopt(rename_all = "kebab-case")]
-struct Opt {
-    #[structopt(short, default_value = "800")]
-    pub width: usize,
-
-    #[structopt(short, default_value = "800")]
-    pub height: usize,
-
-    #[structopt(long, default_value = "22")]
-    pub threads: usize,
-
-    #[structopt(long)]
-    pub lens: String,
-}
-
 pub fn ray_plane_intersection(r: Ray, o: Point3, n: Vec3) -> Option<Point3> {
     // (ro + t * dv - o) * n = 0
     // ((t * dv) + (ro - o)) * n = 0
@@ -181,6 +165,28 @@ enum ProjectionMode {
     },
 }
 
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+struct Opt {
+    #[structopt(short, default_value = "800")]
+    pub width: usize,
+
+    #[structopt(short, default_value = "800")]
+    pub height: usize,
+
+    #[structopt(long, default_value = "22")]
+    pub threads: usize,
+
+    #[structopt(long, default_value = "50")]
+    pub samples: usize,
+
+    #[structopt(long, default_value = "60")]
+    pub fps: usize,
+
+    #[structopt(long)]
+    pub lens: String,
+}
+
 fn main() {
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -268,12 +274,12 @@ fn main() {
         panic!("{}", e);
     });
 
-    // Limit to max ~144 fps update rate
-    window.limit_update_rate(Some(std::time::Duration::from_micros(6944)));
+    let frame_micros = 1000000.0 / opt.fps as f32;
+    window.limit_update_rate(Some(std::time::Duration::from_micros(frame_micros as u64)));
 
-    let frame_dt = 6944.0 / 1000000.0;
+    // let frame_dt = 6944.0 / 1000000.0;
 
-    let mut samples_per_iteration = 100usize;
+    let mut samples_per_iteration = opt.samples;
     let mut total_samples = 0;
     let mut focal_distance_suggestion = None;
     let mut focal_distance_vec: Vec<f32> = Vec::new();
@@ -298,8 +304,8 @@ fn main() {
         sensor_size,
     );
 
-    let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: false };
-    // let ray_generation_mode = RayGenerationMode::FromScene { forced_flat: true };
+    // let ray_generation_mode = RayGenerationMode::FromSensor { forced_flat: true };
+    let ray_generation_mode = RayGenerationMode::FromScene { forced_flat: true };
     let mut mode = Mode::SpotLight;
 
     let mut last_pressed_hotkey = Key::A;
@@ -529,7 +535,7 @@ fn main() {
         }
 
         if paused {
-            let pause_duration = std::time::Duration::from_nanos((frame_dt * 1_000_000.0) as u64);
+            let pause_duration = std::time::Duration::from_micros(frame_micros as u64);
             std::thread::sleep(pause_duration);
 
             window
@@ -865,7 +871,7 @@ fn main() {
             RayGenerationMode::FromScene { forced_flat } => {
                 let mut rays: Vec<(Ray, XYZColor)> = (0..opt.threads)
                     .into_par_iter()
-                    .flat_map(|t| {
+                    .flat_map(|_t| {
                         let mut rays = Vec::new();
                         let mut sampler = RandomSampler::new();
                         for _ in 0..(samples_per_iteration / opt.threads) {
