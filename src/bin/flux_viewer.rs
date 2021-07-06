@@ -199,12 +199,8 @@ fn main() {
         .build_global()
         .unwrap();
 
-    let mut camera_file = File::open(format!("data/cameras/{}.txt", opt.lens)).unwrap();
-    let mut camera_spec = String::new();
-    camera_file.read_to_string(&mut camera_spec).unwrap();
-
-    let (lenses, _last_ior, _last_vno) = parse_lenses_from(&camera_spec);
-    let lens_assembly = LensAssembly::new(&lenses);
+    let (lens_assembly, _last_ior, _last_vno) =
+        LensAssembly::new_from_file(&format!("data/cameras/{}.txt", opt.lens));
 
     let scene = get_scene("textures.toml").unwrap();
 

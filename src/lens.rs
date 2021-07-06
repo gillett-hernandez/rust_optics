@@ -1,7 +1,7 @@
 use packed_simd::f32x4;
 use rand::random;
 
-use std::cmp::PartialEq;
+use std::{cmp::PartialEq, fs::File, io::Read};
 
 pub use crate::math::f32x4_ZERO;
 pub use crate::math::{
@@ -195,6 +195,15 @@ impl LensAssembly {
             aperture_index: i,
             debug_mode: true,
         }
+    }
+    pub fn new_from_file(filepath: &str) -> (Self, f32, f32) {
+        let mut camera_file = File::open(filepath).unwrap();
+        let mut camera_spec = String::new();
+        camera_file.read_to_string(&mut camera_spec).unwrap();
+
+        let (lenses, last_ior, last_vno) = parse_lenses_from(&camera_spec);
+        let lens_assembly = LensAssembly::new(&lenses);
+        (lens_assembly, last_ior, last_vno)
     }
     pub fn aperture_radius(&self) -> f32 {
         let aperture_index = self.aperture_index;
@@ -809,7 +818,7 @@ mod test {
     }
 
     fn basic_incoming_ray() -> Ray {
-        Ray::new(Point3::new(0.1, 0.0, 10.0), -Vec3::Z)
+        Ray::new(Point3::new(0.0, -3.0, 10.0), -Vec3::Z)
     }
 
     fn random_incoming_ray() -> Ray {
@@ -982,7 +991,10 @@ mod test {
 
     #[test]
     fn test_reverse() {
-        let assembly = LensAssembly::new_debug(&construct_lenses());
+        let (mut assembly, last_ior, last_vno) =
+            LensAssembly::new_from_file("data/cameras/brendel_tressar.txt");
+        assembly.debug_mode = true;
+
         println!(
             "total lens thiccness is {}",
             assembly.total_thickness_at(0.0)
