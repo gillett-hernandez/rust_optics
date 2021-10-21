@@ -39,6 +39,7 @@ struct Opt {
     pub lens: String,
 }
 
+#[cfg(feature = "parse")]
 fn main() {
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -531,3 +532,6 @@ fn main() {
             .unwrap();
     }
 }
+
+#[cfg(not(feature = "parse"))]
+fn main() {}
