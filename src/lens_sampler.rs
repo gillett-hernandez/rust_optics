@@ -181,7 +181,7 @@ impl RadialSampler {
         // thus rotate to match actual central point of ray.
 
         let dx = -phi.sin();
-        let direction = Vec3::from_raw(f32x4::new(
+        let direction = Vec3(f32x4::new(
             dx * rotation_angle.cos(),
             dx * rotation_angle.sin(),
             phi.cos(),
@@ -196,7 +196,7 @@ impl RadialSampler {
         // choose direction somehow
 
         let s2d = s0;
-        let frame = TangentFrame::from_normal(Vec3::from_raw(direction.0.replace(3, 0.0)));
+        let frame = TangentFrame::from_normal(Vec3(direction.0.replace(3, 0.0)));
         let phi = s1.x * TAU;
         let r = s2d.x.sqrt() * radius;
         debug_assert!(!r.is_nan());
