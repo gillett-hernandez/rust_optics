@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::error::Error;
+use std::thread;
 use std::{f32::consts::SQRT_2, fs::File, io::Read};
 
 #[allow(unused_imports)]
@@ -9,6 +12,7 @@ use rayon::prelude::*;
 use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
 use lens_sampler::RadialSampler;
 use optics::*;
+use optics::{bind, terminal_thread, Command};
 use subcrate::parsing::*;
 use subcrate::{film::Film, parsing::*};
 
@@ -32,7 +36,7 @@ struct Opt {
     pub lens: String,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     use subcrate::tonemap::{sRGB, Tonemapper};
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -115,7 +119,6 @@ fn main() {
         sensor_size,
     );
 
-    let mut last_pressed_hotkey = Key::A;
     let mut wavelength_sweep: f32 = 0.0;
     let mut wavelength_sweep_speed = 0.001;
     let mut efficiency = 0.0;
@@ -123,27 +126,83 @@ fn main() {
     let mut scene_mode = SceneMode::PinLight;
     let mut paused = false;
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
+    let mut sender_map = HashMap::new();
+    let mut receiver_map = HashMap::new();
+
+    // bind(&mut sender_map, &mut receiver_map, String::from("aperture"));
+    // bind(
+    //     &mut sender_map,
+    //     &mut receiver_map,
+    //     String::from("film_position"),
+    // );
+    // bind(
+    //     &mut sender_map,
+    //     &mut receiver_map,
+    //     String::from("wall_position"),
+    // );
+    // bind(
+    //     &mut sender_map,
+    //     &mut receiver_map,
+    //     String::from("wavelength_sweep"),
+    // );
+    for bind_target in vec![
+        "aperture",
+        "wavelength_sweep",
+        "wall_position",
+        "film_position",
+        "heat_bias",
+        "heat_cap",
+        "texture_scale",
+        "lens_zoom",
+        "sensor_size",
+        "samples",
+        "paused",
+        "clear",
+        "clear_film",
+        "scene_mode",
+        "printout",
+        "exit",
+    ] {
+        bind(&mut sender_map, &mut receiver_map, bind_target.to_owned());
+    }
+
+    let handle = thread::spawn(terminal_thread(sender_map));
+
+    'outer: while window.is_open() && !window.is_key_down(Key::Escape) {
         let mut clear_film = false;
         let mut clear_direction_cache = false;
-        let mut config_direction: f32 = 0.0;
-        let keys = window.get_keys_pressed(KeyRepeat::No);
 
-        for key in keys {
-            match key {
-                Key::A => {
-                    // aperture
-                    println!("mode switched to aperture mode");
-                    println!(
-                        "{:?}, f stop = {:?}",
-                        aperture_radius,
-                        original_aperture_radius / aperture_radius
-                    );
-                    last_pressed_hotkey = Key::A;
+        for (value_name, receiver) in receiver_map.iter() {
+            let (change_float, change_int, got_command) = {
+                let command = receiver.try_recv();
+                if command.is_err() {
+                    (0.0, 0, false)
+                } else {
+                    match command.unwrap() {
+                        Command::ChangeFloat(float) => (float, 0, true),
+                        Command::ChangeInt(int) => (0.0, int, true),
+                        Command::Advance => (0.0, 0, true),
+                    }
                 }
-                Key::F => {
-                    // Film
-                    println!("mode switched to Film position (focus) mode");
+            };
+            if !got_command {
+                continue;
+            }
+            match value_name.as_str() {
+                "aperture" => {
+                    aperture_radius *= change_float.exp2();
+                    heat_bias *= change_float.exp2();
+                    clear_direction_cache = true;
+                    println!(
+                            "changed aperture radius to {}, f stop = {:?} . note: change is interpreted as 2^v, where v is the provided value",
+                            aperture_radius,
+                            original_aperture_radius / aperture_radius
+                        );
+                }
+                "film_position" => {
+                    clear_film = true;
+                    clear_direction_cache = true;
+                    total_samples = 0;
                     println!(
                         "{:?}, {:?}, offset = {}",
                         sensor_pos,
@@ -151,143 +210,51 @@ fn main() {
                         sensor_pos + lens_assembly.total_thickness_at(lens_zoom)
                     );
                     println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
-                    last_pressed_hotkey = Key::F;
-                }
-                Key::W => {
-                    // Wall
-                    println!("mode switched to Wall position mode");
-                    println!("{:?}", wall_position);
-                    println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
-                    last_pressed_hotkey = Key::W;
-                }
-                Key::R => {
-                    // Wall
-                    println!("mode switched to wavelength sweep speed mode");
-                    println!("{:?}", wavelength_sweep_speed);
-                    last_pressed_hotkey = Key::R;
-                }
-                Key::H => {
-                    // Heat
-                    println!("mode switched to Heat mode");
-                    last_pressed_hotkey = Key::H;
-                }
-                Key::Z => {
-                    // zoom
-                    println!("mode switched to zoom mode");
-                    last_pressed_hotkey = Key::Z;
-                }
-                Key::S => {
-                    // samples
-                    println!("mode switched to samples mode");
-                    last_pressed_hotkey = Key::S;
-                }
-
-                Key::C => {
-                    // heat cap
-                    println!("mode switched to heat cap mode");
-                    last_pressed_hotkey = Key::C;
-                }
-                Key::T => {
-                    // heat cap
-                    println!("mode switched to texture scale mode");
-                    last_pressed_hotkey = Key::T;
-                }
-                Key::E => {
-                    // film size.
-                    println!("mode switched to film size mode");
-                    println!("{:?}", sensor_size);
-                    last_pressed_hotkey = Key::E;
-                }
-                Key::P => {
-                    // pause simulation
-                    println!("switching pause state");
-                    paused = !paused;
-                }
-                Key::NumPadMinus | Key::NumPadPlus => {
-                    // pass
-                }
-                Key::M => {}
-
-                _ => {
-                    println!("available keys are as follows. \nA => Aperture mode\nF => Focus mode\nW => Wall position mode\nH => Heat multiplier mode\nC => Heat Cap mode\nT => texture scale mode\nR => Wavelength sweep speed mode\nE => Film Span mode. allows for artificial zoom.\nS => Samples per frame mode\nZ => Zoom mode (only affects zoomable lenses)\n")
-                }
-            }
-        }
-        if window.is_key_pressed(Key::NumPadPlus, KeyRepeat::Yes) {
-            config_direction += 1.0;
-        }
-        if window.is_key_pressed(Key::NumPadMinus, KeyRepeat::Yes) {
-            config_direction -= 1.0;
-        }
-        if config_direction.abs() > 0.0 {
-            match last_pressed_hotkey {
-                Key::A => {
-                    // aperture
-                    aperture_radius *= 1.1f32.powf(config_direction);
-                    heat_bias *= 1.1f32.powf(config_direction);
-                    clear_direction_cache = true;
-                    println!(
-                        "{:?}, f stop = {:?}",
-                        aperture_radius,
-                        original_aperture_radius / aperture_radius
-                    );
-                }
-                Key::F => {
-                    // Film
-                    clear_film = true;
-                    clear_direction_cache = true;
-                    total_samples = 0;
-                    println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
-                    sensor_pos += 1.0 * config_direction;
+                    sensor_pos += change_float;
                     println!(
                         "{:?}, {:?}",
                         sensor_pos,
                         lens_assembly.total_thickness_at(lens_zoom)
                     );
                 }
-                Key::W => {
-                    // Wall
-
+                "wall_position" => {
                     clear_film = true;
                     total_samples = 0;
-                    wall_position += 10.0 * config_direction;
+                    wall_position += 10.0 * change_float;
                     println!("{:?}", wall_position);
                     println!("{:?}, {}, {}", focal_distance_suggestion, variance, stddev);
                 }
-                Key::H => {
-                    // Heat
-                    heat_bias *= 1.1f32.powf(config_direction);
+                "heat_bias" => {
+                    heat_bias *= 1.1f32.powf(change_float);
                     println!("{:?}", heat_bias);
                 }
-                Key::R => {
-                    // wavelength sweep
-                    wavelength_sweep_speed *= 1.1f32.powf(config_direction);
+                "wavelength_sweep" => {
+                    wavelength_sweep_speed *= 1.1f32.powf(change_float);
                     println!("{:?}", wavelength_sweep_speed);
                 }
-                Key::C => {
-                    // heat cap
-                    heat_cap *= 1.1f32.powf(config_direction);
+                "heat_cap" => {
+                    heat_cap *= 1.1f32.powf(change_float);
                     println!("{:?}", heat_cap);
                 }
-                Key::T => {
-                    // texture scale
-                    texture_scale *= 1.1f32.powf(config_direction);
+                "texture_scale" => {
+                    texture_scale *= 1.1f32.powf(change_float);
                     println!("{:?}", texture_scale);
                 }
-                Key::Z => {
+                "lens_zoom" => {
                     clear_film = true;
                     clear_direction_cache = true;
                     total_samples = 0;
-                    lens_zoom += 0.01 * config_direction;
+                    lens_zoom += 0.01 * change_float;
                     println!("{:?}", lens_zoom);
                 }
-                Key::S => {
-                    let tmp_dir = config_direction as i32;
-                    match tmp_dir {
-                        1 => samples_per_iteration += 1,
-                        -1 => {
-                            if samples_per_iteration > 1 {
-                                samples_per_iteration -= 1;
+                "samples" => {
+                    match change_int {
+                        v if v > 0 => samples_per_iteration += v as usize,
+                        v if v < 0 => {
+                            if (-v) as usize >= samples_per_iteration {
+                                samples_per_iteration = 1;
+                            } else {
+                                samples_per_iteration -= (-v) as usize;
                             }
                         }
                         _ => {}
@@ -295,12 +262,44 @@ fn main() {
 
                     println!("{:?}", samples_per_iteration);
                 }
-                Key::E => {
+                "sensor_size" => {
                     clear_film = true;
                     clear_direction_cache = true;
                     total_samples = 0;
-                    sensor_size *= 1.1f32.powf(config_direction);
+                    sensor_size *= 1.1f32.powf(change_float);
                     println!("{:?}", sensor_size);
+                }
+                "paused" => {
+                    // got command, and reached here, thus
+                    println!("switching pause state");
+                    paused = !paused;
+                }
+                "clear" => {
+                    clear_film = true;
+                    clear_direction_cache = true;
+                    wavelength_sweep = 0.0;
+                    total_samples = 0;
+                }
+                "clear_film" => {
+                    clear_film = true;
+                }
+                "scene_mode" => {
+                    // do mode transition
+                    scene_mode = scene_mode.cycle();
+                    // if matches!(scene_mode, SceneMode::SpotLight) {
+                    //     println!("skipping unimplemented scene mode {:?}", scene_mode);
+                    //     scene_mode = scene_mode.cycle();
+                    // }
+                    println!("new mode is {:?}", scene_mode);
+                }
+                "printout" => {
+                    println!("total samples: {}", total_samples);
+                    println!("wavelength_sweep: {}", wavelength_sweep);
+                    println!("sampling efficiency is {}", efficiency);
+                }
+                "exit" => {
+                    println!("got exit command");
+                    break 'outer;
                 }
                 _ => {}
             }
@@ -314,29 +313,6 @@ fn main() {
                 .update_with_buffer(&window_pixels.buffer, window_width, window_height)
                 .unwrap();
             continue;
-        }
-        if window.is_key_pressed(Key::Space, KeyRepeat::Yes) {
-            clear_film = true;
-            clear_direction_cache = true;
-            wavelength_sweep = 0.0;
-            total_samples = 0;
-        }
-        if window.is_key_pressed(Key::V, KeyRepeat::Yes) {
-            println!("total samples: {}", total_samples);
-            println!("wavelength_sweep: {}", wavelength_sweep);
-            println!("sampling efficiency is {}", efficiency);
-        }
-        if window.is_key_pressed(Key::B, KeyRepeat::No) {
-            clear_film = true;
-        }
-        if window.is_key_pressed(Key::M, KeyRepeat::No) {
-            // do mode transition
-            scene_mode = scene_mode.cycle();
-            // if matches!(scene_mode, SceneMode::SpotLight) {
-            //     println!("skipping unimplemented scene mode {:?}", scene_mode);
-            //     scene_mode = scene_mode.cycle();
-            // }
-            println!("new mode is {:?}", scene_mode);
         }
         if clear_film {
             film.buffer
@@ -551,4 +527,6 @@ fn main() {
             .update_with_buffer(&window_pixels.buffer, window_width, window_height)
             .unwrap();
     }
+    handle.join().unwrap();
+    Ok(())
 }

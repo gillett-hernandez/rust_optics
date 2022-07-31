@@ -24,10 +24,16 @@ rayon = "1.5.3"
 serde = { version = "1.0.140", features = ["derive"] }
 structopt = { version = "0.3.26", features = [ "paw" ] }
 toml = "0.5.9"
+linefeed = "0.6.0"
+# regex = "1.6.0"
 subcrate = {path = "./subcrate"}
+crossbeam = "*"
 
 [build-dependencies]
 serde = { version = "1.0.140", features = ["derive"] }
+
+
+
 
 [lib]
 name = "optics"
