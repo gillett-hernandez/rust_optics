@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code, unused_variables)]
 // #![feature(slice_fill)]
 extern crate minifb;
 #[macro_use]
@@ -6,28 +5,19 @@ extern crate packed_simd;
 
 use rayon::prelude::*;
 
-pub mod film;
 pub mod lens;
 pub mod lens_sampler;
 pub mod math;
-pub mod parse;
 pub mod spectrum;
-pub mod tonemap;
 
-pub use film::Film;
+use subcrate::film::Film;
 
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};
-use ::math::*;
-pub use lens::*;
 
-use packed_simd::f32x4;
-use rand::prelude::*;
+pub use lens::*;
 
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
-
-use std::io::prelude::*;
-use std::{collections::HashMap, fs::File};
 
 use std::f32::{
     consts::{SQRT_2, TAU},
@@ -116,6 +106,37 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
         lenses.push(lens);
     }
     (lenses, last_ior, last_vno)
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum SceneMode {
+    // diffuse emitter texture
+    TexturedWall,
+    // small diffuse lights
+    PinLight,
+
+    // spot light shining with a specific angle
+    SpotLight { pos: Vec3, size: f32, span: f32 },
+}
+
+impl SceneMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            SceneMode::TexturedWall => SceneMode::PinLight,
+            SceneMode::PinLight => SceneMode::SpotLight {
+                pos: Vec3::ZERO,
+                size: 0.1,
+                span: 0.99,
+            },
+            SceneMode::SpotLight { .. } => SceneMode::TexturedWall,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ViewMode {
+    Film,
+    SpotOnFilm(f32, f32),
 }
 
 #[cfg(test)]

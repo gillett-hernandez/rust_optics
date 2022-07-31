@@ -7,19 +7,12 @@ use rand::prelude::*;
 use rayon::prelude::*;
 
 use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
-use film::Film;
 use lens_sampler::RadialSampler;
 use optics::*;
-use parse::*;
+use subcrate::parsing::*;
+use subcrate::{film::Film, parsing::*};
 
 use ::math::spectral::BOUNDED_VISIBLE_RANGE;
-use tonemap::{sRGB, Tonemapper};
-
-pub enum Mode {
-    Texture,
-    PinLight,
-    Direction,
-}
 
 use structopt::StructOpt;
 
@@ -39,8 +32,8 @@ struct Opt {
     pub lens: String,
 }
 
-#[cfg(feature = "parse")]
 fn main() {
+    use subcrate::tonemap::{sRGB, Tonemapper};
     let opt = Opt::from_args();
     println!("{:?}", opt);
     let window_width = opt.width;
@@ -82,9 +75,10 @@ fn main() {
 
     let scene = get_scene("textures.toml").unwrap();
 
+    let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
     let mut textures: Vec<TexStack> = Vec::new();
     for tex in scene.textures {
-        textures.push(parse_texture_stack(tex.clone()));
+        textures.push(parse_texture_stack(tex.clone(), wavelength_bounds));
     }
 
     let original_aperture_radius = lens_assembly.aperture_radius();
@@ -104,8 +98,6 @@ fn main() {
     let mut focal_distance_vec: Vec<f32> = Vec::new();
     let mut variance: f32 = 0.0;
     let mut stddev: f32 = 0.0;
-
-    let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
 
     let direction_cache_radius_bins = 512;
     let direction_cache_wavelength_bins = 512;
@@ -128,7 +120,7 @@ fn main() {
     let mut wavelength_sweep_speed = 0.001;
     let mut efficiency = 0.0;
     let efficiency_heat = 0.99;
-    let mut mode = Mode::PinLight;
+    let mut scene_mode = SceneMode::PinLight;
     let mut paused = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -137,7 +129,7 @@ fn main() {
         let mut config_direction: f32 = 0.0;
         let keys = window.get_keys_pressed(KeyRepeat::No);
 
-        for key in keys.unwrap_or(vec![]) {
+        for key in keys {
             match key {
                 Key::A => {
                     // aperture
@@ -214,6 +206,8 @@ fn main() {
                 Key::NumPadMinus | Key::NumPadPlus => {
                     // pass
                 }
+                Key::M => {}
+
                 _ => {
                     println!("available keys are as follows. \nA => Aperture mode\nF => Focus mode\nW => Wall position mode\nH => Heat multiplier mode\nC => Heat Cap mode\nT => texture scale mode\nR => Wavelength sweep speed mode\nE => Film Span mode. allows for artificial zoom.\nS => Samples per frame mode\nZ => Zoom mode (only affects zoomable lenses)\n")
                 }
@@ -337,11 +331,12 @@ fn main() {
         }
         if window.is_key_pressed(Key::M, KeyRepeat::No) {
             // do mode transition
-            mode = match mode {
-                Mode::Texture => Mode::PinLight,
-                Mode::PinLight => Mode::Direction,
-                Mode::Direction => Mode::Texture,
-            };
+            scene_mode = scene_mode.cycle();
+            // if matches!(scene_mode, SceneMode::SpotLight) {
+            //     println!("skipping unimplemented scene mode {:?}", scene_mode);
+            //     scene_mode = scene_mode.cycle();
+            // }
+            println!("new mode is {:?}", scene_mode);
         }
         if clear_film {
             film.buffer
@@ -415,8 +410,6 @@ fn main() {
 
         total_samples += samples_per_iteration;
 
-        // let lambda = wavelength_bounds.span() * random::<f32>() + wavelength_bounds.lower;
-
         let (a, b) = film
             .buffer
             .par_iter_mut()
@@ -469,23 +462,32 @@ fn main() {
                     }) = result
                     {
                         successes += 1;
-                        let t = (wall_position - pupil_ray.origin.z()) / pupil_ray.direction.z();
-                        let point_at_wall = pupil_ray.point_at_parameter(t);
-                        let uv = (
-                            (point_at_wall.x().abs() / texture_scale) % 1.0,
-                            (point_at_wall.y().abs() / texture_scale) % 1.0,
-                        );
 
-                        match mode {
+                        match scene_mode {
                             // // texture based
-                            Mode::Texture => {
+                            SceneMode::TexturedWall => {
+                                let t = (wall_position - pupil_ray.origin.z())
+                                    / pupil_ray.direction.z();
+                                let point_at_wall = pupil_ray.point_at_parameter(t);
+                                let uv = (
+                                    (point_at_wall.x().abs() / texture_scale) % 1.0,
+                                    (point_at_wall.y().abs() / texture_scale) % 1.0,
+                                );
                                 let m = textures[0].eval_at(lambda, uv);
                                 let energy = tau * m * 3.0;
                                 *pixel +=
                                     XYZColor::from(SingleWavelength::new(lambda, energy.into()));
                             }
-                            // // spot light based
-                            Mode::PinLight => {
+
+                            SceneMode::PinLight => {
+                                // diffuse pin lights
+                                let t = (wall_position - pupil_ray.origin.z())
+                                    / pupil_ray.direction.z();
+                                let point_at_wall = pupil_ray.point_at_parameter(t);
+                                let uv = (
+                                    (point_at_wall.x().abs() / texture_scale) % 1.0,
+                                    (point_at_wall.y().abs() / texture_scale) % 1.0,
+                                );
                                 let m = if (uv.0 - 0.5).powi(2) + (uv.1 - 0.5).powi(2) < 0.001 {
                                     // if pupil_ray.direction.z() > 0.999 {
                                     //     1.0
@@ -500,12 +502,30 @@ fn main() {
                                 *pixel +=
                                     XYZColor::from(SingleWavelength::new(lambda, energy.into()));
                             }
-                            Mode::Direction => {
-                                *pixel = XYZColor::new(
-                                    (1.0 + v.x()) * (1.0 + v.w()),
-                                    (1.0 + v.y()) * (1.0 + v.w()),
-                                    (1.0 + v.z()) * (1.0 + v.w()),
+
+                            SceneMode::SpotLight { pos, size, span } => {
+                                let t = (wall_position - pupil_ray.origin.z())
+                                    / pupil_ray.direction.z();
+                                let point_at_wall = pupil_ray.point_at_parameter(t);
+                                let uv = (
+                                    (point_at_wall.x() / texture_scale),
+                                    (point_at_wall.y() / texture_scale),
                                 );
+                                let m =
+                                    if (uv.0 - pos.x()).powi(2) + (uv.1 - pos.y()).powi(2) < size {
+                                        // if position matches
+                                        if pupil_ray.direction.z() > span {
+                                            // if direction matches
+                                            1.0
+                                        } else {
+                                            0.0
+                                        }
+                                    } else {
+                                        0.0
+                                    };
+                                let energy = tau * m * 3.0;
+                                *pixel +=
+                                    XYZColor::from(SingleWavelength::new(lambda, energy.into()));
                             }
                         };
                     }
@@ -532,6 +552,3 @@ fn main() {
             .unwrap();
     }
 }
-
-#[cfg(not(feature = "parse"))]
-fn main() {}
