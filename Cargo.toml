@@ -3,10 +3,7 @@ name = "rust_optics"
 version = "0.1.0"
 authors = ["Gillett Hernandez <gillett.hernandez@gmail.com>"]
 edition = "2018"
-default-run = "forward_tracing"
 
-[features]
-parse = []
 
 [dependencies]
 image = "0.24.3"
@@ -22,22 +19,32 @@ paw = "1.0"
 rand = "0.8.5"
 rayon = "1.5.3"
 serde = { version = "1.0.140", features = ["derive"] }
-structopt = { version = "0.3.26", features = [ "paw" ] }
 toml = "0.5.9"
-linefeed = "0.6.0"
-# regex = "1.6.0"
 subcrate = {path = "./subcrate"}
-crossbeam = "*"
+# regex = "1.6.0"
+
+[dev-dependencies]
+crossbeam  = "*"
+structopt = { version = "0.3.26", features = [ "paw" ] }
+linefeed = "0.6.0"
+egui = "*"
+eframe = "*"
+egui_extras = "*"
 
 [build-dependencies]
 serde = { version = "1.0.140", features = ["derive"] }
 
 
-
-
 [lib]
 name = "optics"
 path = "src/lib.rs"
+
+[[example]]
+name = "forward_tracing"
+
+[[example]]
+name = "reverse_tracing"
+
 
 [profile.dev]
 opt-level = 3

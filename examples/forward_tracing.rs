@@ -1,18 +1,19 @@
 use std::collections::HashMap;
-use std::error::Error;
+
+use std::sync::Arc;
 use std::thread;
 use std::{f32::consts::SQRT_2, fs::File, io::Read};
 
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 // use packed_simd::f32x4;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use rand::prelude::*;
 use rayon::prelude::*;
 
 use ::math::{random_cosine_direction, SingleWavelength, XYZColor};
 use lens_sampler::RadialSampler;
 use optics::*;
-use optics::{bind, terminal_thread, Command};
 use subcrate::parsing::*;
 use subcrate::{film::Film, parsing::*};
 
@@ -36,7 +37,87 @@ struct Opt {
     pub lens: String,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+pub enum Command {
+    ChangeFloat(f32),
+    ChangeInt(i32),
+    Advance,
+}
+
+pub fn bind(
+    senders: &mut HashMap<String, Arc<Sender<Command>>>,
+    receivers: &mut HashMap<String, Receiver<Command>>,
+    name: String,
+) {
+    let (sender, receiver) = unbounded();
+    senders.insert(name.clone(), Arc::new(sender));
+    receivers.insert(name.clone(), receiver);
+}
+
+pub fn terminal_thread(channels: HashMap<String, Arc<Sender<Command>>>) -> impl Fn() -> () {
+    move || {
+        use linefeed::{Interface, ReadResult};
+
+        let reader = Interface::new("tracer-prompt").expect("failed to create terminal interface");
+
+        reader
+            .set_prompt("tracer> ")
+            .expect("failed to set terminal prompt");
+
+        // let mut last_input = String::from("");
+
+        while let Ok(result) = reader.read_line() {
+            let input = match result {
+                ReadResult::Input(input) => input,
+                ReadResult::Eof => {
+                    return;
+                }
+                ReadResult::Signal(signal) => {
+                    return;
+                }
+            };
+            reader.add_history_unique(input.clone());
+            let mut chomper = input.split(" ");
+            if let Some(word) = chomper.next() {
+                if let Some(channel) = channels.get(word) {
+                    if let Some(command_type) = chomper.next() {
+                        match command_type {
+                            "float" => {
+                                if let Some(Ok(value)) = chomper.next().map(|e| e.parse::<f32>()) {
+                                    if channel.send(Command::ChangeFloat(value)).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            "int" => {
+                                if let Some(Ok(value)) = chomper.next().map(|e| e.parse::<i32>()) {
+                                    if channel.send(Command::ChangeInt(value)).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        println!();
+                    } else {
+                        if channel.send(Command::Advance).is_err() {
+                            return;
+                        }
+                        if word == "exit" {
+                            return;
+                        }
+                    }
+                } else if word == "help" {
+                    for key in channels.keys() {
+                        println!("key {}", key);
+                    }
+                }
+            }
+        }
+
+        println!("Goodbye.");
+    }
+}
+fn main() {
     use subcrate::tonemap::{sRGB, Tonemapper};
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -129,22 +210,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sender_map = HashMap::new();
     let mut receiver_map = HashMap::new();
 
-    // bind(&mut sender_map, &mut receiver_map, String::from("aperture"));
-    // bind(
-    //     &mut sender_map,
-    //     &mut receiver_map,
-    //     String::from("film_position"),
-    // );
-    // bind(
-    //     &mut sender_map,
-    //     &mut receiver_map,
-    //     String::from("wall_position"),
-    // );
-    // bind(
-    //     &mut sender_map,
-    //     &mut receiver_map,
-    //     String::from("wavelength_sweep"),
-    // );
     for bind_target in vec![
         "aperture",
         "wavelength_sweep",
@@ -441,6 +506,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                         match scene_mode {
                             // // texture based
+                            // ignore because texture scale is used across multiple of these entries
                             SceneMode::TexturedWall => {
                                 let t = (wall_position - pupil_ray.origin.z())
                                     / pupil_ray.direction.z();
@@ -528,5 +594,4 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
     handle.join().unwrap();
-    Ok(())
 }

@@ -17,10 +17,9 @@ pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 pub use lens::*;
 
 pub extern crate nalgebra as na;
-use crossbeam::channel::unbounded;
-use crossbeam::channel::{Receiver, Sender};
 pub use na::{Matrix3, Vector3};
 
+#[cfg(feature = "build-binary")]
 use std::collections::HashMap;
 use std::f32::{
     consts::{SQRT_2, TAU},
@@ -141,87 +140,6 @@ impl SceneMode {
 pub enum ViewMode {
     Film,
     SpotOnFilm(f32, f32),
-}
-
-pub enum Command {
-    ChangeFloat(f32),
-    ChangeInt(i32),
-    Advance,
-}
-
-pub fn bind(
-    senders: &mut HashMap<String, Arc<Sender<Command>>>,
-    receivers: &mut HashMap<String, Receiver<Command>>,
-    name: String,
-) {
-    let (sender, receiver) = unbounded();
-    senders.insert(name.clone(), Arc::new(sender));
-    receivers.insert(name.clone(), receiver);
-}
-
-pub fn terminal_thread(channels: HashMap<String, Arc<Sender<Command>>>) -> impl Fn() -> () {
-    move || {
-        use linefeed::{Interface, ReadResult};
-
-        let reader = Interface::new("tracer-prompt").expect("failed to create terminal interface");
-
-        reader
-            .set_prompt("tracer> ")
-            .expect("failed to set terminal prompt");
-
-        // let mut last_input = String::from("");
-
-        while let Ok(result) = reader.read_line() {
-            let input = match result {
-                ReadResult::Input(input) => input,
-                ReadResult::Eof => {
-                    return;
-                }
-                ReadResult::Signal(signal) => {
-                    return;
-                }
-            };
-            reader.add_history_unique(input.clone());
-            let mut chomper = input.split(" ");
-            if let Some(word) = chomper.next() {
-                if let Some(channel) = channels.get(word) {
-                    if let Some(command_type) = chomper.next() {
-                        match command_type {
-                            "float" => {
-                                if let Some(Ok(value)) = chomper.next().map(|e| e.parse::<f32>()) {
-                                    if channel.send(Command::ChangeFloat(value)).is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            "int" => {
-                                if let Some(Ok(value)) = chomper.next().map(|e| e.parse::<i32>()) {
-                                    if channel.send(Command::ChangeInt(value)).is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        println!();
-                    } else {
-                        if channel.send(Command::Advance).is_err() {
-                            return;
-                        }
-                        if word == "exit" {
-                            return;
-                        }
-                    }
-                } else if word == "help" {
-                    for key in channels.keys() {
-                        println!("key {}", key);
-                    }
-                }
-            }
-        }
-
-        println!("Goodbye.");
-    }
 }
 
 #[cfg(test)]
