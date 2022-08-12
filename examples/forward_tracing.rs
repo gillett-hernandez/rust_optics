@@ -109,6 +109,9 @@ pub struct SimulationState {
     pub efficiency: f32,
     pub total_samples: usize,
 
+    // dummy only:
+    pub dirty: bool,
+
     pub halt: Arc<AtomicBool>,
 }
 
@@ -120,14 +123,17 @@ impl SimulationState {
                 (target, Command::ChangeFloat(v)) if target.starts_with("aperture_radius") => {
                     println!("changed aperture_radius = {}", v);
                     self.aperture_radius = v;
+                    self.dirty = true;
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("sensor_size") => {
                     println!("changed sensor_size = {}", v);
-                    self.sensor_size = v
+                    self.sensor_size = v;
+                    self.dirty = true;
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("film_position") => {
                     println!("changed film_position = {}", v);
                     self.film_position = v;
+                    self.dirty = true;
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("heat") => {
                     println!("changed solver heat = {}", v);
@@ -135,6 +141,7 @@ impl SimulationState {
                 }
                 (target, Command::Advance) if target.starts_with("view_mode") => {
                     self.view_mode = self.view_mode.cycle();
+                    self.dirty = true;
                     println!("scene mode is now {:?}", self.view_mode);
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("view_mode") => {
@@ -146,10 +153,12 @@ impl SimulationState {
                             "x" => {
                                 println!("updating view mode position on data end, new x = {}", v);
                                 *x = v;
+                                self.dirty = true;
                             }
                             "y" => {
                                 println!("updating view mode position on data end, new y = {}", v);
                                 *y = v;
+                                self.dirty = true;
                             }
                             _ => {
                                 println!("but failed to match to subtarget");
@@ -163,6 +172,7 @@ impl SimulationState {
                 (target, Command::Advance) if target.starts_with("scene_mode") => {
                     self.scene_mode = self.scene_mode.cycle();
                     println!("scene mode is now {:?}", self.scene_mode);
+                    self.dirty = true;
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("scene_mode") => {
                     assert!(target.find('.') == Some("scene_mode".len()));
@@ -176,23 +186,28 @@ impl SimulationState {
                             if tail.starts_with("distance") {
                                 println!("distance = {}", v);
                                 *distance = v;
+                                self.dirty = true;
                             } else if tail.starts_with("texture_scale") {
                                 println!("texture_scale = {}", v);
                                 *texture_scale = v;
+                                self.dirty = true;
                             }
                         }
                         SceneMode::SpotLight { pos, size, span } => match tail {
                             "pos.x" => {
                                 pos.0 = pos.0.replace(0, v);
                                 println!("pos = {:?}", pos.0);
+                                self.dirty = true;
                             }
                             "pos.y" => {
                                 pos.0 = pos.0.replace(1, v);
                                 println!("pos = {:?}", pos.0);
+                                self.dirty = true;
                             }
                             "pos.z" => {
                                 pos.0 = pos.0.replace(2, v);
                                 println!("pos = {:?}", pos.0);
+                                self.dirty = true;
                             }
                             "size" => {
                                 println!();
@@ -201,6 +216,7 @@ impl SimulationState {
                                     return;
                                 }
                                 *size = v;
+                                self.dirty = true;
                             }
                             "span" => {
                                 println!();
@@ -209,6 +225,7 @@ impl SimulationState {
                                     return;
                                 }
                                 *span = v;
+                                self.dirty = true;
                             }
                             _ => {
                                 println!("but failed to match to subtarget");
@@ -579,7 +596,12 @@ fn run_simulation(
             {
                 clear_direction_cache = true;
             }
+
             local_simulation_state.data_update(message);
+            if local_simulation_state.dirty {
+                local_simulation_state.dirty = false;
+                clear_film = true;
+            }
             paused = local_simulation_state.paused;
         }
 
@@ -1019,6 +1041,7 @@ fn main() {
         lens_zoom: 0.0,
         maybe_sender: None,
         maybe_receiver: None,
+        dirty: false,
         efficiency: 0.0,
         total_samples: 0,
         halt,
