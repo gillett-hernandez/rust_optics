@@ -11,10 +11,23 @@ pub struct Input<T> {
     pub lambda: f32,
 }
 
+impl<T> Input<T> {
+    pub fn new(ray: T, lambda: f32) -> Self {
+        Self { ray, lambda }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Output<T> {
     pub ray: T,
+    // transmittance
     pub tau: f32,
+}
+
+impl<T> Output<T> {
+    pub fn new(ray: T, tau: f32) -> Self {
+        Self { ray, tau }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -22,9 +35,7 @@ pub struct PlaneRay(pub f32x4);
 
 impl PlaneRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self {
-            0: f32x4::new(x, y, dx, dy),
-        }
+        Self(f32x4::new(x, y, dx, dy))
     }
     pub fn x(&self) -> f32 {
         self.0.extract(0)
@@ -45,9 +56,7 @@ pub struct SphereRay(pub f32x4);
 
 impl SphereRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self {
-            0: f32x4::new(x, y, dx, dy),
-        }
+        Self(f32x4::new(x, y, dx, dy))
     }
     pub fn x(&self) -> f32 {
         self.0.extract(0)
@@ -63,17 +72,19 @@ impl SphereRay {
     }
 }
 
-impl From<SphereRay> for PlaneRay {
-    fn from(other: SphereRay) -> Self {
-        Self { 0: other.0 }
-    }
-}
+// impl From<SphereRay> for PlaneRay {
+//     fn from(other: SphereRay) -> Self {
+//         // should probably not just blindly convert
+//         Self( other.0 )
+//     }
+// }
 
-impl From<PlaneRay> for SphereRay {
-    fn from(other: PlaneRay) -> Self {
-        Self { 0: other.0 }
-    }
-}
+// impl From<PlaneRay> for SphereRay {
+//     fn from(other: PlaneRay) -> Self {
+//         // should probably not just blindly convert
+//         Self ( other.0 )
+//     }
+// }
 
 #[cfg(test)]
 mod test {
@@ -85,7 +96,7 @@ mod test {
     fn test_random_sampler_1d() {
         let mut sampler = Box::new(RandomSampler::new());
         let mut s = 0.0;
-        for i in 0..1000000 {
+        for _ in 0..1000000 {
             let sample = sampler.draw_1d();
             assert!(0.0 <= sample.x && sample.x < 1.0, "{}", sample.x);
             s += function(sample.x);
@@ -96,7 +107,7 @@ mod test {
     fn test_stratified_sampler_1d() {
         let mut sampler = Box::new(StratifiedSampler::new(10, 10, 10));
         let mut s = 0.0;
-        for i in 0..1000000 {
+        for _ in 0..1000000 {
             let sample = sampler.draw_1d();
             assert!(0.0 <= sample.x && sample.x < 1.0, "{}", sample.x);
             s += function(sample.x);
@@ -107,7 +118,7 @@ mod test {
     fn test_stratified_sampler_2d() {
         let mut sampler = Box::new(StratifiedSampler::new(10, 10, 10));
 
-        for i in 0..1000000 {
+        for _ in 0..1000000 {
             let sample = sampler.draw_2d();
             assert!(0.0 <= sample.x && sample.x <= 1.0, "{}", sample.x);
             assert!(0.0 <= sample.y && sample.y <= 1.0, "{}", sample.y);
@@ -117,7 +128,7 @@ mod test {
     fn test_stratified_sampler_3d() {
         let mut sampler = Box::new(StratifiedSampler::new(10, 10, 10));
 
-        for i in 0..1000000 {
+        for _ in 0..1000000 {
             let sample = sampler.draw_3d();
             assert!(0.0 <= sample.x && sample.x <= 1.0, "{}", sample.x);
             assert!(0.0 <= sample.y && sample.y <= 1.0, "{}", sample.y);

@@ -1,3 +1,4 @@
+use crate::aperture::Aperture;
 use crate::math::*;
 use crate::*;
 
@@ -12,7 +13,7 @@ pub struct RadialSampler {
 
 impl RadialSampler {
     // the following function only works and applies to lens with radial symmetry
-    pub fn new<F>(
+    pub fn new<A>(
         radius_cap: f32,
         radius_bins: usize,
         wavelength_bins: usize,
@@ -20,21 +21,22 @@ impl RadialSampler {
         film_position: f32,
         lens_assembly: &LensAssembly,
         lens_zoom: f32,
-        aperture_callback: F,
+        aperture: &A,
         solver_heat: f32,
         sensor_size: f32,
     ) -> Self
     where
-        F: Send + Sync + Fn(f32, Ray) -> bool,
+        A: Send + Sync + Aperture,
     {
-        // create film of vecs.
+        // create film of f32x4s
         let mut film = Film::new(radius_bins, wavelength_bins, f32x4::splat(0.0));
         let aperture_radius = lens_assembly.aperture_radius();
         film.buffer.par_iter_mut().enumerate().for_each(|(i, v)| {
             let radius_bin = i % radius_bins;
             let wavelength_bin = i / radius_bins;
-            let lambda = wavelength_bin as f32 * wavelength_bounds.span() / wavelength_bins as f32
-                + wavelength_bounds.lower;
+
+            let lambda =
+                wavelength_bounds.sample((0.5 + wavelength_bin as f32) / wavelength_bins as f32);
             let radius = radius_cap * radius_bin as f32 / radius_bins as f32;
             // find direction (with fixed y = 0) for sampling aperture and outer pupil, and find corresponding sampling "radius"
 
@@ -51,10 +53,12 @@ impl RadialSampler {
                 direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
 
                 let ray = Ray::new(ray_origin, direction);
-                let result =
-                    lens_assembly.trace_forward(lens_zoom, &Input { ray, lambda }, 1.0, |e| {
-                        (aperture_callback(aperture_radius, e), false)
-                    });
+                let result = lens_assembly.trace_forward(
+                    lens_zoom,
+                    Input::new(ray, lambda / 1000.0),
+                    1.0,
+                    |e| (aperture.intersects(aperture_radius, e), false),
+                );
                 if let Some(Output { .. }) = result {
                     // found good direction, so break
                     break;
@@ -72,16 +76,18 @@ impl RadialSampler {
             'outer: loop {
                 radius += solver_heat;
                 let mut ct = 0;
-                for mult in vec![-1.0, 1.0] {
+                for mult in [-1.0, 1.0] {
                     let old_angle = (-direction.x() / direction.z()).atan();
                     let new_angle = old_angle + radius * mult;
                     let new_direction = Vec3::new(-new_angle.sin(), 0.0, new_angle.cos());
                     let ray = Ray::new(ray_origin, new_direction);
-                    let result =
-                        lens_assembly.trace_forward(lens_zoom, &Input { ray, lambda }, 1.0, |e| {
-                            (aperture_callback(aperture_radius, e), false)
-                        });
-                    if let Some(Output { .. }) = result {
+                    let result = lens_assembly.trace_forward(
+                        lens_zoom,
+                        Input::new(ray, lambda / 1000.0),
+                        1.0,
+                        |e| (aperture.intersects(aperture_radius, e), false),
+                    );
+                    if result.is_some() {
                         // found good direction. keep expanding.
                         max_angle = max_angle.max(new_angle);
                         min_angle = min_angle.min(new_angle);
@@ -116,7 +122,7 @@ impl RadialSampler {
     }
 
     pub fn sample(&self, lambda: f32, point: Point3, s0: Sample2D, s1: Sample1D) -> Vec3 {
-        let [x, y, z, _]: [f32; 4] = point.0.into();
+        let [x, y, _, _]: [f32; 4] = point.0.into();
 
         let rotation_angle = y.atan2(x);
 
@@ -204,5 +210,48 @@ impl RadialSampler {
         debug_assert!(unnormalized_v.0.is_finite().all());
         // transforming a normalized vector should yield another normalized vector, as long as all the frame components are orthonormal.
         frame.to_world(&unnormalized_v.normalized())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{fs::File, io::Read};
+
+    use ::math::spectral::BOUNDED_VISIBLE_RANGE;
+
+    use super::*;
+    #[test]
+    fn test_radial_sampler() {
+        let mut camera_file = File::open(&"data/cameras/petzval_kodak.txt").unwrap();
+        let mut camera_spec = String::new();
+        camera_file.read_to_string(&mut camera_spec).unwrap();
+        let (interfaces, _, _) = parse_lenses_from(&camera_spec);
+        let assembly = LensAssembly::new(&interfaces).as_debug();
+        let aperture_radius = assembly.aperture_radius();
+        let aperture = SimpleBladedAperture::new(6, 0.5);
+
+        assembly.trace_reverse(
+            0.0,
+            Input::new(
+                Ray::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0)),
+                0.550,
+            ),
+            1.001,
+            |e| (aperture.intersects(aperture_radius, e), false),
+        );
+
+        let film_position = assembly.total_thickness_at(0.0);
+        let sampler = RadialSampler::new(
+            35.0,
+            100,
+            100,
+            BOUNDED_VISIBLE_RANGE,
+            -film_position,
+            &assembly,
+            0.0,
+            &aperture,
+            0.1,
+            35.0,
+        );
     }
 }

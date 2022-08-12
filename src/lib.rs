@@ -5,13 +5,16 @@ extern crate packed_simd;
 
 use rayon::prelude::*;
 
+pub mod aperture;
 pub mod lens;
 pub mod lens_sampler;
 pub mod math;
+pub mod misc;
 pub mod spectrum;
 
 use subcrate::film::Film;
 
+use crate::aperture::*;
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 
 pub use lens::*;
@@ -25,40 +28,15 @@ use std::f32::{
     consts::{SQRT_2, TAU},
     EPSILON,
 };
-use std::sync::Arc;
-
-pub fn circular_aperture(aperture_radius: f32, ray: Ray) -> bool {
-    ray.origin.x().hypot(ray.origin.y()) > aperture_radius
-}
-
-pub fn bladed_aperture(aperture_radius: f32, blades: usize, ray: Ray) -> bool {
-    match blades {
-        6 => {
-            let phi = std::f32::consts::PI / 3.0;
-            let top = Vec3::new(phi.cos(), phi.sin(), 0.0);
-            let bottom = Vec3::new(phi.cos(), -phi.sin(), 0.0);
-            let mut point = Vec3::from(ray.origin);
-            point.0 = point.0.replace(2, 0.0);
-            // point = point.normalized();
-            let cos_top = point * top;
-            let cos_bottom = point * bottom;
-            let cos_apex = point.x();
-            let minimum = ((1.0 + cos_top.abs().powf(0.5)) / cos_top.abs())
-                .min((1.0 + cos_bottom.abs().powf(0.5)) / cos_bottom.abs())
-                .min((1.0 + cos_apex.abs().powf(0.5)) / cos_apex.abs());
-            point.x().hypot(point.y()) > minimum * aperture_radius
-        }
-        _ => circular_aperture(aperture_radius, ray),
-    }
-}
 
 fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Option<Output<Ray>>> {
     let mut outputs: Vec<Option<Output<Ray>>> = Vec::new();
     let aperture_radius = 10.0;
     let mut failed = 0;
+    let aperture = SimpleBladedAperture::new(6, 0.5);
     for input in inputs {
-        let output = assembly.trace_forward(0.0, input, 1.04, |e| {
-            (bladed_aperture(aperture_radius, 6, e), false)
+        let output = assembly.trace_forward(0.0, *input, 1.04, |ray| {
+            (aperture.intersects(aperture_radius, ray), false)
         });
         if output.is_none() {
             failed += 1;
@@ -76,10 +54,12 @@ fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
 fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Option<Output<Ray>>> {
     let mut outputs: Vec<Option<Output<Ray>>> = Vec::new();
     let aperture_radius = 10.0;
+    let aperture = SimpleBladedAperture::new(6, 0.5);
+
     let mut failed = 0;
     for input in inputs {
-        let output = assembly.trace_reverse(0.0, input, 1.04, |e| {
-            (bladed_aperture(aperture_radius, 6, e), false)
+        let output = assembly.trace_reverse(0.0, *input, 1.04, |ray| {
+            (aperture.intersects(aperture_radius, ray), false)
         });
         if output.is_none() {
             failed += 1;
@@ -95,11 +75,12 @@ fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
 }
 
 pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
+    // returns a vec of lens elements, the last ior and last vno
     let lines = spec.lines();
     let mut lenses: Vec<LensInterface> = Vec::new();
     let (mut last_ior, mut last_vno) = (1.0, 0.0);
     for line in lines {
-        if line.starts_with("#") || line == "" || line == "\n" {
+        if line.is_empty() || line.starts_with('#') || line == "\n" {
             continue;
         }
         let lens = LensInterface::parse_from(line, last_ior, last_vno).unwrap();
@@ -109,37 +90,6 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
         lenses.push(lens);
     }
     (lenses, last_ior, last_vno)
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum SceneMode {
-    // diffuse emitter texture
-    TexturedWall,
-    // small diffuse lights
-    PinLight,
-
-    // spot light shining with a specific angle
-    SpotLight { pos: Vec3, size: f32, span: f32 },
-}
-
-impl SceneMode {
-    pub fn cycle(self) -> Self {
-        match self {
-            SceneMode::TexturedWall => SceneMode::PinLight,
-            SceneMode::PinLight => SceneMode::SpotLight {
-                pos: Vec3::ZERO,
-                size: 0.1,
-                span: 0.99,
-            },
-            SceneMode::SpotLight { .. } => SceneMode::TexturedWall,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum ViewMode {
-    Film,
-    SpotOnFilm(f32, f32),
 }
 
 #[cfg(test)]
@@ -180,7 +130,7 @@ mod test {
     //             for x in 0..w {
     //                 let ray = plane_ray_sampler(x as f32 / w as f32, y as f32 / h as f32, &mut sampler);
     //                 let lambda = wavelength_sampler(&mut sampler);
-    //                 inputs.push(Input { ray, lambda });
+    //                 inputs.push(Input::new( ray, lambda ));
     //             }
     //         }
 

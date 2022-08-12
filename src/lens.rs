@@ -1,14 +1,13 @@
 use packed_simd::f32x4;
-use rand::random;
 
 use std::cmp::PartialEq;
+use std::f32::consts::TAU;
 
 pub use crate::math::f32x4_ZERO;
 pub use crate::math::{
     Input, Output, PlaneRay, Point3, RandomSampler, Ray, Sample1D, Sample2D, Sample3D, Sampler,
     SphereRay, StratifiedSampler, TangentFrame, Vec3,
 };
-use crate::parse_lenses_from;
 
 const INTENSITY_EPS: f32 = 0.0001;
 
@@ -36,6 +35,8 @@ pub struct LensInterface {
 
 impl LensInterface {
     pub fn thickness_at(self, mut zoom: f32) -> f32 {
+        assert!((0.0..1.0).contains(&zoom));
+        // returns [0, infinity]
         if zoom < 0.5 {
             zoom *= 2.0;
             self.thickness_short * (1.0 - zoom) + self.thickness_mid * zoom
@@ -48,7 +49,7 @@ impl LensInterface {
 
     pub fn parse_from(string: &str, default_ior: f32, default_vno: f32) -> Result<Self, &str> {
         // format is:
-        // lens := radius thickness_short(/thickness_mid(/thickness_long)?)? (anamorphic)? (mtl_name|'air'|'iris') ior vno housing_radius ('#!aspheric='aspheric_correction)?
+        // lens := radius thickness_short(/thickness_mid(/thickness_long)?)? (anamorphic)? (mtl_name|'air'|'iris') ior vno housing_radius( '#!aspheric='aspheric_correction)?
         // radius := float
         // thickness_short := float
         // thickness_mid := float
@@ -60,7 +61,7 @@ impl LensInterface {
         // housing_radius := float
         // aspheric_correction := (float','){3}float
 
-        if string.starts_with("#") {
+        if string.starts_with('#') {
             return Err("line started with comment");
         }
         println!("{}", string);
@@ -73,7 +74,8 @@ impl LensInterface {
         let thickness_token: &str = tokens
             .next()
             .ok_or("ran out of tokens at thickness token")?;
-        let mut thickness_iterator = thickness_token.split("/");
+        let mut thickness_iterator = thickness_token.split('/');
+        // thickness_iterator.
         let thickness_short = thickness_iterator
             .next()
             .unwrap()
@@ -167,7 +169,6 @@ pub struct LensAssembly {
 
 impl LensAssembly {
     pub fn new(lenses: &[LensInterface]) -> Self {
-        // returns last index if slice does not contain an aperture
         let mut i = 0;
         for elem in lenses {
             if elem.lens_type == LensType::Aperture {
@@ -181,35 +182,26 @@ impl LensAssembly {
             debug_mode: false,
         }
     }
-    pub fn new_debug(lenses: &[LensInterface]) -> Self {
-        // returns last index if slice does not contain an aperture
-        let mut i = 0;
-        for elem in lenses {
-            if elem.lens_type == LensType::Aperture {
-                break;
-            }
-            i += 1;
-        }
-        LensAssembly {
-            lenses: lenses.into(),
-            aperture_index: i,
-            debug_mode: true,
-        }
+    pub fn as_debug(mut self) -> Self {
+        self.debug_mode = true;
+        self
     }
     pub fn aperture_radius(&self) -> f32 {
         let aperture_index = self.aperture_index;
         self.lenses[aperture_index].housing_radius
     }
-    pub fn aperture_position(&self, zoom: f32) -> f32 {
+    pub fn aperture_position(&self, zoom: f32) -> Option<f32> {
         // returns the end if there is no aperture
         let mut pos = 0.0;
+        let mut found = false;
         for elem in self.lenses.iter() {
             if elem.lens_type == LensType::Aperture {
+                found = true;
                 break;
             }
             pos += elem.thickness_at(zoom);
         }
-        pos
+        found.then_some(pos)
     }
     pub fn total_thickness_at(&self, zoom: f32) -> f32 {
         let mut pos = 0.0;
@@ -223,14 +215,14 @@ impl LensAssembly {
     pub fn trace_forward<F>(
         &self,
         zoom: f32,
-        input: &Input<Ray>,
+        input: Input<Ray>,
         atmosphere_ior: f32,
         aperture_hook: F,
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
     {
-        assert!(self.lenses.len() > 0);
+        assert!(!self.lenses.is_empty());
         let mut error = 0;
         let mut n1 = spectrum_eta_from_abbe_num(
             self.lenses.last().unwrap().ior,
@@ -310,18 +302,18 @@ impl LensAssembly {
         })
     }
 
-    // evaluate scene to sensor. input ray must be facing away from the camera.
+    // evaluate scene to sensor. input ray must be facing away from the camera?
     pub fn trace_reverse<F>(
         &self,
         zoom: f32,
-        input: &Input<Ray>,
+        input: Input<Ray>,
         atmosphere_ior: f32,
         aperture_hook: F,
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
     {
-        assert!(self.lenses.len() > 0);
+        assert!(!self.lenses.is_empty());
         let mut error = 0;
         let mut n1 = atmosphere_ior;
         let mut ray = input.ray;
@@ -445,15 +437,11 @@ pub fn trace_spherical(
         Err(4)
     } else {
         let mut error = 0;
-        let t;
+
         let a2 = 2.0 * a;
         let t0 = (-b - discriminant.sqrt()) / a2;
         let t1 = (-b + discriminant.sqrt()) / a2;
-        if t0 < -1.0e-4 {
-            t = t1;
-        } else {
-            t = t0.min(t1);
-        }
+        let t = if t0 < -1.0e-4 { t1 } else { t0.min(t1) };
         if t < -1.0e-4 {
             Err(16)
         } else {
@@ -559,12 +547,11 @@ pub fn trace_cylindrical(
     if discriminant < 0.0 {
         return Err(4);
     }
-    let t;
-    if r > 0.0 {
-        t = (-b - discriminant.sqrt()) / (2.0 * a);
+    let t = if r > 0.0 {
+        (-b - discriminant.sqrt()) / (2.0 * a)
     } else {
-        t = (-b + discriminant.sqrt()) / (2.0 * a);
-    }
+        (-b + discriminant.sqrt()) / (2.0 * a)
+    };
     ray = ray.at_time(t);
     let sqr = ray.origin.0 * ray.origin.0;
     if sqr.extract(0) + sqr.extract(1) > housing_radius * housing_radius {
@@ -634,6 +621,7 @@ pub fn sphere_to_camera_space(ray_in: SphereRay, sphere_center: f32, sphere_radi
             .sqrt()
             / sphere_radius.abs(),
     );
+    // TODO: check that the arbitrariness of the tangent frame doesn't negatively impact the way the output ray here gets transformed, i.e. rotating it incorrectly.
     let temp_direction = Vec3::new(dx, dy, (1.0 - dx * dx - dy * dy).max(0.0).sqrt());
     let ex = Vec3::new(normal.z(), 0.0, -normal.x()).normalized();
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
@@ -650,19 +638,49 @@ pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f3
     let temp_direction = ray_in.direction.normalized();
     let ex = Vec3::new(normal.z(), 0.0, -normal.x());
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
-    SphereRay {
-        0: shuffle!(
-            ray_in.origin.0,
-            frame.to_local(&temp_direction).0,
-            [0, 1, 4, 5]
-        ),
-    }
+    SphereRay(shuffle!(
+        ray_in.origin.0,
+        frame.to_local(&temp_direction).0,
+        [0, 1, 4, 5]
+    ))
+}
+
+pub fn sample_point_on_lens(radius: f32, housing_radius: f32, sample: Sample2D) -> Point3 {
+    // radius is the radius of the sphere of the lens surface, and housing radius is the absolute limit on the distance from 0,0 to x,y
+    //
+    //
+    //                                   _
+    //                              \     |
+    //                               \    |
+    //                               |    | -- housing radius
+    //                                \   |
+    //                                 |  |
+    // ---------------------------------  |
+    // |_______________________________| _
+    //               ^ radius
+    //
+    // housing_radius = sin(max_angle) * radius
+    // max_angle = asin(housing_radius / radius)
+    let max_angle = (housing_radius / radius).asin();
+    // sqrt to sample solid angle more evenly
+    let phi = max_angle * sample.x.sqrt();
+    let theta = sample.y * TAU;
+    let (phi_sin, phi_cos) = phi.sin_cos();
+    let (theta_sin, theta_cos) = theta.sin_cos();
+
+    Point3::new(
+        radius * theta_cos * phi_sin,
+        radius * theta_sin * phi_sin,
+        radius * phi_cos,
+    )
 }
 
 #[cfg(test)]
 mod test {
 
-    use crate::bladed_aperture;
+    use crate::aperture::*;
+    use crate::parse_lenses_from;
+    use rand::random;
 
     use super::*;
     #[test]
@@ -693,10 +711,7 @@ mod test {
         let lens_assembly = LensAssembly::new(&lenses);
         let output = lens_assembly.trace_forward(
             0.0,
-            &Input {
-                ray: Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::Z),
-                lambda: 500.0,
-            },
+            Input::new(Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::Z), 0.5),
             1.0,
             |_| (false, true),
         );
@@ -723,23 +738,20 @@ mod test {
     }
 
     fn basic_plane_input() -> Input<PlaneRay> {
-        Input {
-            ray: PlaneRay::new(
+        Input::new(
+            PlaneRay::new(
                 35.0 * (random::<f32>() - 0.5),
                 35.0 * (random::<f32>() - 0.5),
                 random::<f32>() / 10.0,
                 random::<f32>() / 10.0,
             ),
-            lambda: 0.45,
-        }
+            0.45,
+        )
     }
 
     fn basic_sphere_input(radius: f32) -> Input<SphereRay> {
         let incoming = random_incoming_ray();
-        Input {
-            ray: camera_space_to_sphere(incoming, -radius, radius),
-            lambda: 0.45,
-        }
+        Input::new(camera_space_to_sphere(incoming, -radius, radius), 0.45)
     }
 
     #[test]
@@ -885,22 +897,17 @@ mod test {
 
     #[test]
     fn test_reverse() {
-        let assembly = LensAssembly::new_debug(&construct_lenses());
+        let assembly = LensAssembly::new(&construct_lenses()).as_debug();
         println!(
             "total lens thiccness is {}",
             assembly.total_thickness_at(0.0)
         );
         let incoming_ray = basic_incoming_ray();
         let aperture_radius = assembly.aperture_radius() / 3.0;
-        let r = assembly.trace_reverse(
-            0.0,
-            &Input {
-                ray: incoming_ray,
-                lambda: 550.0,
-            },
-            1.04,
-            |e| (bladed_aperture(aperture_radius, 6, e), false),
-        );
+        let aperture = SimpleBladedAperture::new(6, 0.5);
+        let r = assembly.trace_reverse(0.0, Input::new(incoming_ray, 0.55), 1.04, |e| {
+            (aperture.intersects(aperture_radius, e), false)
+        });
         if let Some(o) = r {
             println!("{:?}", o);
         } else {

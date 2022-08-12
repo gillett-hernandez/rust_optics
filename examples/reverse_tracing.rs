@@ -1,27 +1,28 @@
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
 
-use egui::{Color32, ColorImage, Image, TextureHandle};
+use ::math::f32x4;
 // use crate::math::Sample2D;
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 // use packed_simd::f32x4;
 // use rand::prelude::*;
 use eframe::egui;
-use egui_extras::RetainedImage;
 // use egui::prelude::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
+use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use rayon::prelude::*;
 
 use crate::math::{SingleWavelength, XYZColor};
 use subcrate::{film::Film, parsing::*};
 // use lens_sampler::RadialSampler;
+use optics::misc::{Cycle, SceneMode, ViewMode};
 use optics::*;
 
 use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
-use crate::{SceneMode, ViewMode};
 
 use structopt::StructOpt;
 
@@ -41,6 +42,7 @@ struct Opt {
     pub lens: String,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Command {
     ChangeFloat(f32),
     ChangeInt(i32),
@@ -79,21 +81,24 @@ impl From<i32> for Command {
 pub struct SimulationState {
     maybe_sender: Option<Sender<(String, Command)>>,
 
-    pub heat_bias: f32,
-    pub heat_cap: f32,
-    pub scene_mode: SceneMode,
-    pub view_mode: ViewMode,
-    pub paused: bool,
-    pub samples: usize,
-
     pub aperture_radius: f32,
     pub max_aperture_radius: f32,
     pub sensor_size: f32,
     pub max_sensor_size: f32,
-    pub wall_position: f32,
+
     pub film_position: f32,
+    pub min_film_position: f32,
+
+    pub aperture: ApertureEnum,
+    pub scene_mode: SceneMode,
+    pub view_mode: ViewMode,
+
+    pub heat_bias: f32,
+    pub heat_cap: f32,
+    pub samples: usize,
+
     pub lens_zoom: f32,
-    pub texture_scale: f32,
+    pub paused: bool,
     //     "wavelength_sweep", // toggle
 
     //     "clear", // button
@@ -114,20 +119,68 @@ impl SimulationState {
     pub fn data_update(&mut self, message: (String, Command)) {
         if self.maybe_sender.is_none() {
             // in puppet
-            match message.0.as_str() {
-                "aperture_radius" => {
-                    message
-                        .1
-                        .as_float()
-                        .map(|float| self.aperture_radius = float);
+            match message {
+                m if m.0.starts_with("aperture_radius") => {
+                    m.1.as_float().map(|float| self.aperture_radius = float);
                 }
-                "sensor_size" => {
-                    message.1.as_float().map(|float| self.sensor_size = float);
+                m if m.0.starts_with("sensor_size") => {
+                    m.1.as_float().map(|float| self.sensor_size = float);
                 }
-                target => {
+                m if m.0.starts_with("film_position") => {
+                    m.1.as_float().map(|float| self.film_position = float);
+                }
+                (target, Command::Advance) if target.starts_with("scene_mode") => {
+                    self.scene_mode = self.scene_mode.cycle();
+                    println!("scene mode is now {:?}", self.scene_mode);
+                }
+                (target, Command::ChangeFloat(v)) if target.starts_with("scene_mode") => {
+                    // because length "12345" gives 5 but the index 5 is one further than the last index, we don't need to add one to skip the dot.
+                    assert!(target.find('.') == Some("scene_mode".len()));
+                    let tail = &target["scene_mode".len()..];
+                    match &mut self.scene_mode {
+                        SceneMode::TexturedWall {
+                            distance,
+                            texture_scale,
+                        } => {
+                            if tail.starts_with("distance") {
+                                *distance = v;
+                            } else if tail.starts_with("texture_scale") {
+                                *texture_scale = v;
+                            }
+                        }
+                        SceneMode::SpotLight { pos, size, span } => match tail {
+                            "pos.x" => {
+                                pos.0 = pos.0.replace(0, v);
+                            }
+                            "pos.y" => {
+                                pos.0 = pos.0.replace(1, v);
+                            }
+                            "pos.z" => {
+                                pos.0 = pos.0.replace(2, v);
+                            }
+                            "size" => {
+                                if v < 0.0 {
+                                    println!("attempted to change size to some nonsensical value, ignoring.\nsize should be above 0");
+                                    return;
+                                }
+                                *size = v;
+                            }
+                            "span" => {
+                                if v < 0.0 || v >= 1.0 {
+                                    println!("attempted to change span to some nonsensical value, ignoring.\nspan should be between 0 and 1, where near 1 cooresponds to a very focused spotlight.");
+                                    return;
+                                }
+                                *span = v;
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+                (target, command) => {
                     println!(
-                        "received mutate command without a matching target, {}",
-                        target
+                        "received mutate command without a matching target, {}, {:?}",
+                        target, command
                     );
                 }
             }
@@ -140,22 +193,138 @@ impl eframe::App for SimulationState {
         egui::CentralPanel::default().show(ctx, |ui| {
             let sender = self.maybe_sender.as_ref().unwrap();
 
-            let mut percentile = (100.0 * self.aperture_radius / self.max_aperture_radius) as i32;
-            let response = ui.add(egui::Slider::new(&mut percentile, 0..=100));
+            ui.label("aperture radius, mm");
+            let response = ui.add(
+                egui::DragValue::new(&mut self.aperture_radius)
+                    .clamp_range(RangeInclusive::new(0.0, self.max_aperture_radius))
+                    .speed(0.1 / self.max_aperture_radius),
+            );
             if response.changed() {
-                self.aperture_radius = self.max_aperture_radius * (percentile as f32) / 100.0;
                 sender
-                    .try_send((String::from("aperture_radius"), self.aperture_radius.into()))
+                    .try_send((
+                        "aperture_radius".into(),
+                        Command::ChangeFloat(self.aperture_radius),
+                    ))
                     .unwrap()
             }
 
-            let mut percentile = (100.0 * self.sensor_size / self.max_sensor_size) as i32;
-            let response = ui.add(egui::Slider::new(&mut percentile, 0..=100));
+            ui.label("sensor radius, mm");
+            let response = ui.add(
+                egui::DragValue::new(&mut self.sensor_size)
+                    .clamp_range(RangeInclusive::new(1.0, self.max_sensor_size))
+                    .speed(0.1 / self.max_sensor_size),
+            );
             if response.changed() {
-                self.sensor_size = self.max_sensor_size * (percentile as f32) / 100.0;
                 sender
-                    .try_send((String::from("sensor_size"), self.sensor_size.into()))
+                    .try_send(("sensor_size".into(), Command::ChangeFloat(self.sensor_size)))
                     .unwrap()
+            }
+
+            ui.label("film position, mm");
+            let response = ui.add(
+                egui::DragValue::new(&mut self.film_position)
+                    .clamp_range(RangeInclusive::new(-f32::INFINITY, self.min_film_position))
+                    .speed(0.1),
+            );
+            if response.changed() {
+                sender
+                    .try_send((
+                        "film_position".into(),
+                        Command::ChangeFloat(self.film_position),
+                    ))
+                    .unwrap()
+            }
+
+            let response = ui.add(egui::Button::new("change scene"));
+            if response.clicked() {
+                self.scene_mode = self.scene_mode.cycle();
+                sender
+                    .try_send((String::from("scene_mode"), Command::Advance))
+                    .unwrap();
+            }
+
+            ui.label(format!("scene mode is {:?}", self.scene_mode));
+            match &mut self.scene_mode {
+                SceneMode::TexturedWall {
+                    distance,
+                    texture_scale,
+                } => {
+                    ui.label("distance, mm");
+                    let response = ui.add(
+                        egui::DragValue::new(distance)
+                            .clamp_range(RangeInclusive::new(0.0, f64::INFINITY)),
+                    );
+                    if response.changed() {
+                        sender
+                            .try_send((
+                                "scene_mode.distance".into(),
+                                Command::ChangeFloat(*distance),
+                            ))
+                            .unwrap()
+                    }
+                    ui.label("texture_scale");
+                    let response = ui.add(
+                        egui::DragValue::new(texture_scale)
+                            .clamp_range(RangeInclusive::new(0.0, f64::INFINITY)),
+                    );
+                    if response.changed() {
+                        sender
+                            .try_send((
+                                "scene_mode.texture_scale".into(),
+                                Command::ChangeFloat(*texture_scale),
+                            ))
+                            .unwrap()
+                    }
+                }
+                SceneMode::SpotLight { pos, size, span } => {
+                    let [mut x, mut y, mut z, _]: [f32; 4] = pos.0.into();
+
+                    let mut any_changed = false;
+
+                    ui.label("pos.x");
+                    let response = ui.add(egui::DragValue::new(&mut x).speed(0.01));
+                    any_changed |= response.changed();
+
+                    ui.label("pos.y");
+                    let response = ui.add(egui::DragValue::new(&mut y).speed(0.01));
+                    any_changed |= response.changed();
+
+                    ui.label("pos.z");
+                    let response = ui.add(egui::DragValue::new(&mut z).speed(0.01));
+                    any_changed |= response.changed();
+
+                    if any_changed {
+                        sender
+                            .try_send(("scene_mode.pos.x".into(), Command::ChangeFloat(x)))
+                            .unwrap();
+                        sender
+                            .try_send(("scene_mode.pos.y".into(), Command::ChangeFloat(y)))
+                            .unwrap();
+                        sender
+                            .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(z)))
+                            .unwrap();
+                    }
+                    pos.0 = f32x4::new(x, y, z, 0.0);
+
+                    ui.label("size");
+                    let response = ui.add(
+                        egui::DragValue::new(size)
+                            .clamp_range(RangeInclusive::new(0.0, f64::INFINITY)),
+                    );
+                    if response.changed() {
+                        sender
+                            .try_send(("scene_mode.size".into(), Command::ChangeFloat(*size)))
+                            .unwrap()
+                    }
+                    ui.label("span");
+                    let response = ui.add(egui::Slider::new(span, 0.0..=1.0));
+                    if response.changed() {
+                        sender
+                            .try_send(("scene_mode.span".into(), Command::ChangeFloat(*span)))
+                            .unwrap()
+                    }
+                }
+                SceneMode::PinLight => {}
             }
 
             let response = ui.add(egui::Button::new("clear film"));
@@ -236,19 +405,21 @@ fn run_simulation(
         textures.push(parse_texture_stack(tex.clone(), wavelength_bounds));
     }
 
-    let mut samples_per_iteration = 1000usize;
+    let wall_texture = &textures[0];
+
+    let mut samples_per_iteration = 100usize;
     let mut total_samples = 0;
-    let mut focal_distance_suggestion = None;
-    let mut focal_distance_vec: Vec<f32> = Vec::new();
-    let mut variance: f32 = 0.0;
-    let mut stddev: f32 = 0.0;
+    // let mut focal_distance_suggestion = None;
+    // let mut focal_distance_vec: Vec<f32> = Vec::new();
+    // let mut variance: f32 = 0.0;
+    // let mut stddev: f32 = 0.0;
 
     let mut wavelength_sweep: f32 = 0.0;
     let mut wavelength_sweep_speed = 0.001;
     let mut efficiency = 0.0;
     let efficiency_heat = 0.99;
     let mut scene_mode = local_simulation_state.scene_mode;
-    let mut texture_scale = local_simulation_state.texture_scale;
+
     let mut paused = local_simulation_state.paused;
     // let direction_cache_radius_bins = 512;
     // let direction_cache_wavelength_bins = 512;
@@ -300,59 +471,59 @@ fn run_simulation(
         let srgb_tonemapper = sRGB::new(&film, 1.0);
 
         // autofocus:
-        {
-            let n = 25;
-            let origin = Point3::new(0.0, 0.0, local_simulation_state.film_position);
-            let direction = Point3::new(
-                0.0,
-                lens_assembly.lenses.last().unwrap().housing_radius,
-                0.0,
-            ) - origin;
-            let maximum_angle = -(direction.y() / direction.z()).atan();
+        // {
+        //     let n = 25;
+        //     let origin = Point3::new(0.0, 0.0, local_simulation_state.film_position);
+        //     let direction = Point3::new(
+        //         0.0,
+        //         lens_assembly.lenses.last().unwrap().housing_radius,
+        //         0.0,
+        //     ) - origin;
+        //     let maximum_angle = -(direction.y() / direction.z()).atan();
 
-            focal_distance_vec.clear();
-            for i in 0..n {
-                // choose angle to shoot ray from (0.0, 0.0, wall_position)
-                let angle = ((i as f32 + 0.5) / n as f32) * maximum_angle;
-                let ray = Ray::new(origin, Vec3::new(0.0, angle.sin(), angle.cos()));
-                // println!("{:?}", ray);
-                for w in 0..10 {
-                    let lambda =
-                        wavelength_bounds.lower + (w as f32 / 10.0) * wavelength_bounds.span();
-                    let result = lens_assembly.trace_forward(
-                        local_simulation_state.lens_zoom,
-                        &Input { ray, lambda },
-                        1.0,
-                        |e| {
-                            (
-                                bladed_aperture(local_simulation_state.aperture_radius, 6, e),
-                                false,
-                            )
-                        },
-                    );
-                    if let Some(Output { ray: pupil_ray, .. }) = result {
-                        let dt = (-pupil_ray.origin.y()) / pupil_ray.direction.y();
-                        let point = pupil_ray.point_at_parameter(dt);
-                        // println!("{:?}", point);
+        //     focal_distance_vec.clear();
+        //     for i in 0..n {
+        //         // choose angle to shoot ray from (0.0, 0.0, wall_position)
+        //         let angle = ((i as f32 + 0.5) / n as f32) * maximum_angle;
+        //         let ray = Ray::new(origin, Vec3::new(0.0, angle.sin(), angle.cos()));
+        //         // println!("{:?}", ray);
+        //         for w in 0..10 {
+        //             let lambda =
+        //                 wavelength_bounds.lower + (w as f32 / 10.0) * wavelength_bounds.span();
+        //             let result = lens_assembly.trace_forward(
+        //                 local_simulation_state.lens_zoom,
+        //                 &Input::new( ray, lambda ),
+        //                 1.0,
+        //                 |e| {
+        //                     (
+        //                         bladed_aperture(local_simulation_state.aperture_radius, 6, e),
+        //                         false,
+        //                     )
+        //                 },
+        //             );
+        //             if let Some(Output { ray: pupil_ray, .. }) = result {
+        //                 let dt = (-pupil_ray.origin.y()) / pupil_ray.direction.y();
+        //                 let point = pupil_ray.point_at_parameter(dt);
+        //                 // println!("{:?}", point);
 
-                        if point.z().is_finite() {
-                            focal_distance_vec.push(point.z());
-                        }
-                    }
-                }
-            }
-            if focal_distance_vec.len() > 0 {
-                let avg: f32 =
-                    focal_distance_vec.iter().sum::<f32>() / focal_distance_vec.len() as f32;
-                focal_distance_suggestion = Some(avg);
-                variance = focal_distance_vec
-                    .iter()
-                    .map(|e| (avg - *e).powf(2.0))
-                    .sum::<f32>()
-                    / focal_distance_vec.len() as f32;
-                stddev = variance.sqrt();
-            }
-        }
+        //                 if point.z().is_finite() {
+        //                     focal_distance_vec.push(point.z());
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     if focal_distance_vec.len() > 0 {
+        //         let avg: f32 =
+        //             focal_distance_vec.iter().sum::<f32>() / focal_distance_vec.len() as f32;
+        //         focal_distance_suggestion = Some(avg);
+        //         variance = focal_distance_vec
+        //             .iter()
+        //             .map(|e| (avg - *e).powf(2.0))
+        //             .sum::<f32>()
+        //             / focal_distance_vec.len() as f32;
+        //         stddev = variance.sqrt();
+        //     }
+        // }
 
         total_samples += samples_per_iteration;
 
@@ -363,62 +534,88 @@ fn run_simulation(
         let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
 
         for _ in 0..samples_per_iteration {
-            let ray = match local_simulation_state.scene_mode {
+            let (ray, le) = match local_simulation_state.scene_mode {
                 // diffuse emitter texture
-                SceneMode::TexturedWall => {
+                SceneMode::TexturedWall {
+                    distance: wall_position,
+                    texture_scale,
+                } => {
                     // ray is generated according to texture scale.
                     // 4 possible quadrants.
-                    let (rx, ry) = (
-                        sampler.draw_1d().x * 2.0 - 1.0,
-                        sampler.draw_1d().x * 2.0 - 1.0,
-                    );
+                    let sample = sampler.draw_2d();
+                    let (rx, ry) = (sample.x - 0.5, sample.y - 0.5);
+                    // let (r, phi) = (
+                    //     sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
+                    //     sampler.draw_1d().x * TAU,
+                    // );
 
-                    let (r, phi) = (
-                        sampler.draw_1d().x.sqrt() * lens_assembly.lenses[0].housing_radius,
-                        sampler.draw_1d().x * TAU,
+                    // let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
+                    let point_on_lens = sample_point_on_lens(
+                        lens_assembly.lenses[0].radius,
+                        lens_assembly.lenses[0].housing_radius,
+                        sampler.draw_2d(),
                     );
-
-                    let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
-                    let point_on_texture = Point3::new(
-                        texture_scale * rx,
-                        texture_scale * ry,
-                        local_simulation_state.wall_position,
-                    );
+                    let point_on_texture =
+                        Point3::new(texture_scale * rx, texture_scale * ry, wall_position);
                     let v = (point_on_lens - point_on_texture).normalized();
 
-                    Ray::new(point_on_texture, v)
+                    (
+                        Ray::new(point_on_texture, v),
+                        wall_texture.eval_at(lambda, (sample.x, sample.y)),
+                    )
                 }
                 // parallel light
                 SceneMode::SpotLight { pos, span, size } => {
                     // 4 quadrants.
 
-                    let (r, phi) = (
-                        sampler.draw_1d().x.sqrt() * local_simulation_state.texture_scale,
-                        sampler.draw_1d().x * TAU,
-                    );
+                    let (r, phi) = (sampler.draw_1d().x.sqrt() * size, sampler.draw_1d().x * TAU);
 
                     let (px, py) = (pos.x() + r * phi.cos(), pos.y() + r * phi.sin());
-                    // TODO: use span and size to determine angle
 
-                    Ray::new(
-                        Point3::new(px, py, local_simulation_state.wall_position),
-                        -Vec3::Z,
-                    )
+                    let ray_origin = Point3::new(px, py, pos.z());
+
+                    // let (r, phi) = (sampler.draw_1d().x.sqrt() * span, sampler.draw_1d().x * TAU);
+
+                    // let (px, py) = (r * phi.cos(), r * phi.sin());
+                    // // TODO: use span and size to determine angle
+                    // let dir = Vec3::new(px, py, -1.0).normalized();
+                    // span is essentially the lower limit of the cosine of the angle i'm willing to sample.
+                    let max_angle = span.acos();
+                    let angle = sampler.draw_1d().x.sqrt() * max_angle;
+
+                    let other_angle = sampler.draw_1d().x * TAU;
+                    let dir = Vec3::new(
+                        angle.sin() * other_angle.cos(),
+                        angle.sin() * other_angle.sin(),
+                        -angle.cos(),
+                    );
+
+                    // sample lens
+                    // let point_on_lens = Point3::new(r * phi.cos(), r * phi.sin(), 0.0);
+                    // let dir = (point_on_lens - ray_origin).normalized();
+
+                    // // filter based on span
+                    // if dir.z().abs() < span {
+                    //     continue;
+                    // }
+
+                    (Ray::new(ray_origin, dir), 1.0)
                 }
                 SceneMode::PinLight => {
                     // 4 quadrants.
 
-                    let (r, phi) = (
-                        sampler.draw_1d().x.sqrt() * local_simulation_state.texture_scale,
-                        sampler.draw_1d().x * TAU,
-                    );
+                    let (r, phi) = (sampler.draw_1d().x.sqrt(), sampler.draw_1d().x * TAU);
 
                     let (dx, dy) = (r * phi.cos(), r * phi.sin());
                     let (px, py) = (0.0, 0.0);
 
-                    Ray::new(
-                        Point3::new(px, py, local_simulation_state.wall_position),
-                        Vec3::new(dx, dy, -1.0).normalized(),
+                    // TODO: add parameter to control pinlight stuff.
+                    (
+                        Ray::new(
+                            Point3::new(px, py, 100.0),
+                            Vec3::new(dx, dy, -1.0).normalized(),
+                        ),
+                        1.0,
                     )
                 }
             };
@@ -428,11 +625,13 @@ fn run_simulation(
             // do actual tracing through lens for film sample
             let result = lens_assembly.trace_reverse(
                 local_simulation_state.lens_zoom,
-                &Input { ray, lambda },
+                Input::new(ray, lambda / 1000.0),
                 1.04,
                 |e| {
                     (
-                        bladed_aperture(local_simulation_state.aperture_radius, 6, e),
+                        local_simulation_state
+                            .aperture
+                            .intersects(local_simulation_state.aperture_radius, e),
                         false,
                     )
                 },
@@ -447,24 +646,28 @@ fn run_simulation(
                     / pupil_ray.direction.z();
                 let point_at_film = pupil_ray.point_at_parameter(t);
                 let uv = (
-                    (((point_at_film.x() / local_simulation_state.sensor_size) + 1.0) / 2.0) % 1.0,
-                    (((point_at_film.y() / local_simulation_state.sensor_size) + 1.0) / 2.0) % 1.0,
+                    ((point_at_film.x() / local_simulation_state.sensor_size) + 1.0) / 2.0,
+                    ((point_at_film.y() / local_simulation_state.sensor_size) + 1.0) / 2.0,
                 );
-                film.write_at(
-                    (uv.0 * window_width as f32) as usize,
-                    (uv.1 * window_height as f32) as usize,
-                    film.at(
+                if uv.0 < 1.0 && uv.1 < 1.0 && uv.0 > 0.0 && uv.1 > 0.0 {
+                    film.write_at(
                         (uv.0 * window_width as f32) as usize,
                         (uv.1 * window_height as f32) as usize,
-                    ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
-                );
+                        film.at(
+                            (uv.0 * window_width as f32) as usize,
+                            (uv.1 * window_height as f32) as usize,
+                        ) + XYZColor::from(SingleWavelength::new(lambda, tau.into())),
+                    );
+                }
             }
         }
-        efficiency = (efficiency_heat) * efficiency
-            + (1.0 - efficiency_heat) * (successes as f32 / attempts as f32);
-        sender
-            .try_send((String::from("efficiency"), efficiency.into()))
-            .unwrap();
+        if attempts > 0 {
+            efficiency = (efficiency_heat) * efficiency
+                + (1.0 - efficiency_heat) * (successes as f32 / attempts as f32);
+            sender
+                .try_send((String::from("efficiency"), efficiency.into()))
+                .unwrap();
+        }
         sender
             .try_send((String::from("total_samples"), (total_samples as i32).into()))
             .unwrap();
@@ -512,14 +715,16 @@ fn main() {
         max_aperture_radius: original_aperture_radius,
         sensor_size: 35.0,
         max_sensor_size: 35.0,
+        aperture: ApertureEnum::CircularAperture(CircularAperture::default()),
+        // aperture: ApertureEnum::SimpleBladedAperture(SimpleBladedAperture::new(6, 0.5)),
         scene_mode: SceneMode::PinLight,
         view_mode: ViewMode::Film,
         paused: false,
         samples: 1,
-        wall_position: 500.0,
         film_position: -lens_assembly.total_thickness_at(lens_zoom),
+        min_film_position: lens_assembly.lenses.last().unwrap().thickness_short
+            - lens_assembly.total_thickness_at(lens_zoom),
         lens_zoom: 0.0,
-        texture_scale: 1.0,
         maybe_sender: None,
         maybe_receiver: None,
         efficiency: 0.0,
@@ -545,7 +750,7 @@ fn main() {
     });
 
     eframe::run_native(
-        "Show an image with eframe/egui",
+        "Reverse Tracer Control Panel",
         options,
         Box::new(|_cc| Box::new(simulation_state_egui)),
     );
