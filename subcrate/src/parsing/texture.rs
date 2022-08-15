@@ -1,5 +1,5 @@
-use math::Bounds1D;
-use math::{curves::InterpolationMode, CurveWithCDF, SpectralPowerDistributionFunction};
+use math::{curves::InterpolationMode, CurveWithCDF, SpectralPowerDistributionFunction, Bounds1D};
+
 use packed_simd::f32x4;
 use serde::{Deserialize, Serialize};
 

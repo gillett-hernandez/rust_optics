@@ -46,7 +46,7 @@ name = "reverse_tracing"
 
 
 [profile.dev]
-opt-level = 3
+opt-level = 0
 panic='abort'
 debug=true
 

@@ -1,7 +1,8 @@
 extern crate serde;
 
-use math::*;
-use math::{curves::InterpolationMode, spectral::EXTENDED_VISIBLE_RANGE};
+use math::Bounds1D;
+use math::{curves::InterpolationMode, Curve};
+use math::spectral::EXTENDED_VISIBLE_RANGE;
 
 use std::error::Error;
 use std::fs::File;
