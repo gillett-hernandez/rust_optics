@@ -9,7 +9,7 @@ edition = "2018"
 # image = "0.24.3"
 itertools = "0.10.3"
 line_drawing = "1.0.0"
-math =  { git = "https://github.com/gillett-hernandez/rust_cg_math" }
+math =  { tag = "v0.3.0", git = "https://github.com/gillett-hernandez/rust_cg_math" }
 minifb = "0.23.0"
 nalgebra = "0.31.1"
 num_cpus = "1.13.1"
