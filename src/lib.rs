@@ -35,9 +35,13 @@ fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
     let mut failed = 0;
     let aperture = SimpleBladedAperture::new(6, 0.5);
     for input in inputs {
-        let output = assembly.trace_forward(0.0, *input, 1.04, |ray| {
-            (aperture.intersects(aperture_radius, ray), false)
-        });
+        let output = assembly.trace_forward(
+            0.0,
+            *input,
+            1.04,
+            |ray| (aperture.intersects(aperture_radius, ray), false),
+            noop,
+        );
         if output.is_none() {
             failed += 1;
         }
@@ -58,9 +62,13 @@ fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
 
     let mut failed = 0;
     for input in inputs {
-        let output = assembly.trace_reverse(0.0, *input, 1.04, |ray| {
-            (aperture.intersects(aperture_radius, ray), false)
-        });
+        let output = assembly.trace_reverse(
+            0.0,
+            *input,
+            1.04,
+            |ray| (aperture.intersects(aperture_radius, ray), false),
+            noop,
+        );
         if output.is_none() {
             failed += 1;
         }
@@ -91,6 +99,8 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
     }
     (lenses, last_ior, last_vno)
 }
+
+pub fn noop<A>(arg: A) {}
 
 #[cfg(test)]
 mod test {

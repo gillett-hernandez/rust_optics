@@ -212,15 +212,17 @@ impl LensAssembly {
     }
 
     // traces rays from the sensor to the outer pupil
-    pub fn trace_forward<F>(
+    pub fn trace_forward<F, G>(
         &self,
         zoom: f32,
         input: Input<Ray>,
         atmosphere_ior: f32,
         aperture_hook: F,
+        mut step_hook: G,
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
+        G: FnMut((Point3, Point3, f32)) -> (),
     {
         assert!(!self.lenses.is_empty());
         let mut error = 0;
@@ -236,6 +238,8 @@ impl LensAssembly {
         let t = (position - ray.origin.z()) / (ray.direction.z());
         // compute jacobian
         // let mut jacobian = f32x4::splat(1.0);
+
+        step_hook((ray.origin, ray.point_at_parameter(t), intensity));
         ray.origin = ray.point_at_parameter(t);
         for (k, lens) in self.lenses.iter().rev().enumerate() {
             let r = -lens.radius;
@@ -273,6 +277,7 @@ impl LensAssembly {
             } else {
                 res = trace_spherical(ray, r, position + r, lens.housing_radius).ok()?;
             }
+            step_hook((ray.origin, res.0.origin, intensity));
             ray = res.0;
             let normal = res.1;
             let n2 = if k > 0 {
@@ -303,15 +308,17 @@ impl LensAssembly {
     }
 
     // evaluate scene to sensor. input ray must be facing away from the camera?
-    pub fn trace_reverse<F>(
+    pub fn trace_reverse<F, G>(
         &self,
         zoom: f32,
         input: Input<Ray>,
         atmosphere_ior: f32,
         aperture_hook: F,
+        mut step_hook: G,
     ) -> Option<Output<Ray>>
     where
         F: Fn(Ray) -> (bool, bool),
+        G: FnMut((Point3, Point3, f32)) -> (),
     {
         assert!(!self.lenses.is_empty());
         let mut error = 0;
@@ -326,6 +333,9 @@ impl LensAssembly {
         ray.origin = Point3::from(-Vec3::from(ray.origin));
         ray.direction = -ray.direction;
         let t = (-ray.origin.z()) / (ray.direction.z());
+
+        step_hook((ray.origin, ray.point_at_parameter(t), intensity));
+
         ray.origin = ray.point_at_parameter(t);
         if self.debug_mode {
             println!("setting ray to {:?}", ray);
@@ -372,6 +382,7 @@ impl LensAssembly {
             if self.debug_mode {
                 println!("ray is now {:?}", ray);
             }
+            step_hook((ray.origin, trace_result.0.origin, intensity));
             ray = trace_result.0;
             let normal = trace_result.1;
 
@@ -679,6 +690,7 @@ pub fn sample_point_on_lens(radius: f32, housing_radius: f32, sample: Sample2D) 
 mod test {
 
     use crate::aperture::*;
+    use crate::noop;
     use crate::parse_lenses_from;
     use rand::random;
 
@@ -714,6 +726,7 @@ mod test {
             Input::new(Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::Z), 0.5),
             1.0,
             |_| (false, true),
+            noop,
         );
 
         println!("{:?}", output);
@@ -905,9 +918,13 @@ mod test {
         let incoming_ray = basic_incoming_ray();
         let aperture_radius = assembly.aperture_radius() / 3.0;
         let aperture = SimpleBladedAperture::new(6, 0.5);
-        let r = assembly.trace_reverse(0.0, Input::new(incoming_ray, 0.55), 1.04, |e| {
-            (aperture.intersects(aperture_radius, e), false)
-        });
+        let r = assembly.trace_reverse(
+            0.0,
+            Input::new(incoming_ray, 0.55),
+            1.04,
+            |e| (aperture.intersects(aperture_radius, e), false),
+            noop,
+        );
         if let Some(o) = r {
             println!("{:?}", o);
         } else {

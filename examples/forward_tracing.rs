@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
 
-use ::math::{f32x4, random_cosine_direction, PI};
+use ::math::{f32x4, random, random_cosine_direction, Bounds2D, PI};
 // use crate::math::Sample2D;
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
@@ -18,12 +18,13 @@ use eframe::egui;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use optics::lens_sampler::RadialSampler;
+use packed_simd::shuffle;
 use rayon::prelude::*;
 
 use crate::math::{SingleWavelength, XYZColor};
 use subcrate::{film::Film, parsing::*};
 // use lens_sampler::RadialSampler;
-use optics::misc::{Cycle, SceneMode, ViewMode};
+use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
 use optics::*;
 
 use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
@@ -103,8 +104,10 @@ pub struct SimulationState {
 
     pub lens_zoom: f32,
     pub paused: bool,
+    pub use_sampler: bool,
     //     "wavelength_sweep", // toggle
     maybe_receiver: Option<Receiver<(String, Command)>>,
+
     // reporting data
     pub efficiency: f32,
     pub total_samples: usize,
@@ -164,6 +167,41 @@ impl SimulationState {
                                 println!("but failed to match to subtarget");
                             }
                         },
+                        ViewMode::XRay { bounds } => match tail {
+                            "bounds.x_center" => {
+                                let old_center = bounds.x.lower + bounds.x.span() / 2.0;
+                                let adjustment = v - old_center;
+                                bounds.x.lower += adjustment;
+                                bounds.x.upper += adjustment;
+                                self.dirty = true;
+                            }
+                            "bounds.x_span" => {
+                                let old_span = bounds.x.span();
+                                let adjustment = v - old_span;
+                                // shrink or grow by `adjustment`
+                                bounds.x.lower -= adjustment / 2.0;
+                                bounds.x.upper += adjustment / 2.0;
+                                self.dirty = true;
+                            }
+                            "bounds.y_center" => {
+                                let old_center = bounds.y.lower + bounds.y.span() / 2.0;
+                                let adjustment = v - old_center;
+                                bounds.y.lower += adjustment;
+                                bounds.y.upper += adjustment;
+                                self.dirty = true;
+                            }
+                            "bounds.y_span" => {
+                                let old_span = bounds.y.span();
+                                let adjustment = v - old_span;
+                                // shrink or grow by `adjustment`
+                                bounds.y.lower -= adjustment / 2.0;
+                                bounds.y.upper += adjustment / 2.0;
+                                self.dirty = true;
+                            }
+                            _ => {
+                                println!("but failed to match subtarget");
+                            }
+                        },
                         _ => {
                             println!();
                         }
@@ -173,6 +211,10 @@ impl SimulationState {
                     self.scene_mode = self.scene_mode.cycle();
                     println!("scene mode is now {:?}", self.scene_mode);
                     self.dirty = true;
+                }
+                (target, Command::Advance) if target.starts_with("toggle sampler") => {
+                    self.use_sampler = !self.use_sampler;
+                    println!("use sampler is now {:?}", self.use_sampler);
                 }
                 (target, Command::ChangeFloat(v)) if target.starts_with("scene_mode") => {
                     assert!(target.find('.') == Some("scene_mode".len()));
@@ -254,7 +296,7 @@ impl eframe::App for SimulationState {
             let response = ui.add(
                 egui::DragValue::new(&mut self.aperture_radius)
                     .clamp_range(RangeInclusive::new(0.0, self.max_aperture_radius))
-                    .speed(0.1 / self.max_aperture_radius),
+                    .speed(1.0 / self.max_aperture_radius),
             );
             if response.changed() {
                 sender
@@ -269,7 +311,7 @@ impl eframe::App for SimulationState {
             let response = ui.add(
                 egui::DragValue::new(&mut self.sensor_size)
                     .clamp_range(RangeInclusive::new(1.0, self.max_sensor_size))
-                    .speed(0.1),
+                    .speed(1.0),
             );
             if response.changed() {
                 sender
@@ -426,7 +468,74 @@ impl eframe::App for SimulationState {
                             .unwrap();
                     }
                 }
-                ViewMode::Film => {}
+                ViewMode::XRay { bounds } => {
+                    let mut any_changed = false;
+
+                    let mut x = bounds.x.lower + bounds.x.span() / 2.0;
+                    let mut x_span = bounds.x.span();
+                    let mut y = bounds.y.lower + bounds.y.span() / 2.0;
+                    let mut y_span = bounds.y.span();
+
+                    ui.label("x center");
+                    let response = ui.add(egui::DragValue::new(&mut x));
+                    any_changed |= response.changed();
+
+                    ui.label("x span");
+                    let response = ui.add(egui::DragValue::new(&mut x_span));
+                    any_changed |= response.changed();
+
+                    ui.label("y center");
+                    let response = ui.add(egui::DragValue::new(&mut y));
+                    any_changed |= response.changed();
+
+                    ui.label("y span");
+                    let response = ui.add(egui::DragValue::new(&mut y_span));
+                    any_changed |= response.changed();
+
+                    if any_changed {
+                        sender
+                            .try_send(("view_mode.bounds.x_center".into(), Command::ChangeFloat(x)))
+                            .unwrap();
+                        sender
+                            .try_send(("view_mode.bounds.y_center".into(), Command::ChangeFloat(y)))
+                            .unwrap();
+                        sender
+                            .try_send((
+                                "view_mode.bounds.x_span".into(),
+                                Command::ChangeFloat(x_span),
+                            ))
+                            .unwrap();
+                        sender
+                            .try_send((
+                                "view_mode.bounds.y_span".into(),
+                                Command::ChangeFloat(y_span),
+                            ))
+                            .unwrap();
+
+                        let old_center = bounds.x.lower + bounds.x.span() / 2.0;
+                        let adjustment = x - old_center;
+                        bounds.x.lower += adjustment;
+                        bounds.x.upper += adjustment;
+
+                        let old_center = bounds.y.lower + bounds.y.span() / 2.0;
+                        let adjustment = y - old_center;
+                        bounds.y.lower += adjustment;
+                        bounds.y.upper += adjustment;
+
+                        let old_span = bounds.x.span();
+                        let adjustment = x_span - old_span;
+                        // shrink or grow by `adjustment`
+                        bounds.x.lower -= adjustment / 2.0;
+                        bounds.x.upper += adjustment / 2.0;
+
+                        let old_span = bounds.y.span();
+                        let adjustment = y_span - old_span;
+                        // shrink or grow by `adjustment`
+                        bounds.y.lower -= adjustment / 2.0;
+                        bounds.y.upper += adjustment / 2.0;
+                    }
+                }
+                _ => {}
             }
 
             let response = ui.add(egui::Button::new("clear film"));
@@ -447,6 +556,13 @@ impl eframe::App for SimulationState {
                 sender
                     .try_send((String::from("clear both"), Command::Advance))
                     .unwrap();
+            }
+            let response = ui.add(egui::Button::new("toggle sampler"));
+            if response.clicked() {
+                sender
+                    .try_send((String::from("toggle sampler"), Command::Advance))
+                    .unwrap();
+                self.use_sampler = !self.use_sampler;
             }
 
             let receiver = self.maybe_receiver.as_ref().unwrap();
@@ -529,13 +645,6 @@ fn run_simulation(
 
     let frame_dt = 6944.0 / 1000000.0;
 
-    let mut camera_file = File::open(format!("data/cameras/{}.txt", opt.lens)).unwrap();
-    let mut camera_spec = String::new();
-    camera_file.read_to_string(&mut camera_spec).unwrap();
-
-    let (lenses, _last_ior, _last_vno) = parse_lenses_from(&camera_spec);
-    let lens_assembly = LensAssembly::new(&lenses);
-
     let scene = get_scene("textures.toml").unwrap();
 
     let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
@@ -549,7 +658,7 @@ fn run_simulation(
     let mut wall_position = 5000.0;
     let mut texture_scale = 1.0;
 
-    let mut samples_per_iteration = 5usize;
+    let mut samples_per_iteration = 1usize;
     let mut total_samples = 0;
     let mut focal_distance_suggestion = None;
     let mut focal_distance_vec: Vec<f32> = Vec::new();
@@ -666,6 +775,7 @@ fn run_simulation(
                                     false,
                                 )
                             },
+                            crate::noop,
                         );
                         if let Some(Output { ray: pupil_ray, .. }) = result {
                             let dt = (-pupil_ray.origin.y()) / pupil_ray.direction.y();
@@ -700,20 +810,21 @@ fn run_simulation(
         let srgb_tonemapper = sRGB::new(&film, 1.0);
 
         total_samples += samples_per_iteration;
+        let (mut a, mut b) = (0, 0);
 
-        let (a, b) = film
-            .buffer
-            .par_iter_mut()
-            .enumerate()
-            .map(|(i, pixel)| {
-                let mut sampler = RandomSampler::new();
-                let px = i % width;
-                let py = i / width;
+        match local_simulation_state.view_mode {
+            ViewMode::Film => {
+                let pair = film
+                    .buffer
+                    .par_iter_mut()
+                    .enumerate()
+                    .map(|(i, pixel)| {
+                        let mut sampler = RandomSampler::new();
+                        let px = i % width;
+                        let py = i / width;
 
-                let (mut successes, mut attempts) = (0, 0);
-                let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
-                match local_simulation_state.view_mode {
-                    ViewMode::Film => {
+                        let (mut successes, mut attempts) = (0, 0);
+                        let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
                         let central_point = Point3::new(
                             ((px as f32 + 0.5) / width as f32 - 0.5)
                                 * local_simulation_state.sensor_size,
@@ -725,12 +836,13 @@ fn run_simulation(
                             let v;
                             let s0 = sampler.draw_2d();
                             let [mut x, mut y, z, _]: [f32; 4] = central_point.0.into();
+                            // jitter point within pixel
                             x += (s0.x - 0.5) / width as f32 * local_simulation_state.sensor_size;
                             y += (s0.y - 0.5) / height as f32 * local_simulation_state.sensor_size;
 
                             let point = Point3::new(x, y, z);
-                            if true {
-                                // using lens symmetry sampler
+                            if local_simulation_state.use_sampler {
+                                // using radial sampler
 
                                 v = direction_cache.sample(
                                     lambda,
@@ -749,7 +861,7 @@ fn run_simulation(
                             let result = lens_assembly.trace_forward(
                                 lens_zoom,
                                 Input::new(ray, lambda / 1000.0),
-                                1.0,
+                                1.04,
                                 |e| {
                                     (
                                         local_simulation_state
@@ -758,6 +870,7 @@ fn run_simulation(
                                         false,
                                     )
                                 },
+                                crate::noop,
                             );
                             if let Some(Output {
                                 ray: pupil_ray,
@@ -846,8 +959,26 @@ fn run_simulation(
                                 };
                             }
                         }
-                    }
-                    ViewMode::SpotOnFilm(x, y) => {
+
+                        (successes, attempts)
+                    })
+                    .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                a += pair.0;
+                b += pair.1;
+            }
+
+            ViewMode::SpotOnFilm(x, y) => {
+                let pair = film
+                    .buffer
+                    .par_iter_mut()
+                    .enumerate()
+                    .map(|(i, pixel)| {
+                        let mut sampler = RandomSampler::new();
+                        let px = i % width;
+                        let py = i / width;
+
+                        let (mut successes, mut attempts) = (0, 0);
+                        let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
                         let central_point = Point3::new(x, y, local_simulation_state.film_position);
 
                         // figure out which mapping to use for pixels.
@@ -884,6 +1015,7 @@ fn run_simulation(
                                     false,
                                 )
                             },
+                            crate::noop,
                         );
                         if let Some(Output {
                             ray: pupil_ray,
@@ -898,7 +1030,7 @@ fn run_simulation(
 
                                     // this is super jank but it'll get something visual
                                     let mut would_have_sampled = false;
-                                    for _ in 0..100 {
+                                    for _ in 0..5 {
                                         if direction_cache.sample(
                                             lambda,
                                             central_point,
@@ -965,12 +1097,106 @@ fn run_simulation(
                                     ));
                                 }
                             }
+                        } else {
+                            // didn't make it through
+
+                            let mut would_have_sampled = false;
+                            for _ in 0..5 {
+                                if direction_cache.sample(
+                                    lambda,
+                                    central_point,
+                                    sampler.draw_2d(),
+                                    sampler.draw_1d(),
+                                ) * dir
+                                    > 0.99
+                                {
+                                    // aligned enough
+                                    would_have_sampled = true;
+                                }
+                            }
+                            if would_have_sampled {
+                                *pixel += XYZColor::from(SingleWavelength::new(450.0, 1.0.into()));
+                            }
                         }
+                        (successes, attempts)
+                    })
+                    .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                a += pair.0;
+                b += pair.1;
+            }
+            ViewMode::XRay { bounds } => {
+                let mut sampler = RandomSampler::new();
+                let swizzle_project = |pt| project(pt, Vec3::X, |v| shuffle!(v, [2, 1, 0, 3]));
+                for _ in 0..samples_per_iteration {
+                    b += 1;
+                    let (u, v) = {
+                        let sample = sampler.draw_2d();
+                        (sample.x - 0.5, sample.y - 0.5)
+                    };
+
+                    let origin = Point3::new(
+                        u * local_simulation_state.sensor_size,
+                        v * local_simulation_state.sensor_size,
+                        local_simulation_state.film_position,
+                    );
+
+                    let lambda = wavelength_bounds.sample(sampler.draw_1d().x);
+                    let direction = if local_simulation_state.use_sampler {
+                        direction_cache.sample(lambda, origin, sampler.draw_2d(), sampler.draw_1d())
+                    } else {
+                        random_cosine_direction(sampler.draw_2d())
+                    };
+                    let ray = Ray::new(origin, direction);
+
+                    let mut segments = Vec::new();
+
+                    let result = lens_assembly.trace_forward(
+                        lens_zoom,
+                        Input::new(ray, lambda / 1000.0),
+                        1.0,
+                        |e| {
+                            (
+                                local_simulation_state
+                                    .aperture
+                                    .intersects(local_simulation_state.aperture_radius, e),
+                                false,
+                            )
+                        },
+                        |(a, b, tau)| {
+                            segments.push((a, b, tau));
+                        },
+                    );
+                    if let Some(Output {
+                        ray: pupil_ray,
+                        tau,
+                    }) = result
+                    {
+                        a += 1;
+                        // println!("path {:?}", segments);
+                        for (a, b, tau) in segments.iter().skip(1) {
+                            draw_line(
+                                &mut film,
+                                bounds,
+                                swizzle_project(*a),
+                                swizzle_project(*b),
+                                lambda,
+                                *tau,
+                                DrawMode::XiaolinWu,
+                            );
+                        }
+                        draw_line(
+                            &mut film,
+                            bounds,
+                            swizzle_project(pupil_ray.origin),
+                            swizzle_project(pupil_ray.point_at_parameter(1000.0)),
+                            lambda,
+                            tau,
+                            DrawMode::XiaolinWu,
+                        );
                     }
                 }
-                (successes, attempts)
-            })
-            .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+            }
+        }
 
         if b > 0 {
             efficiency =
@@ -1032,15 +1258,18 @@ fn main() {
         // aperture: ApertureEnum::CircularAperture(CircularAperture::default()),
         aperture: ApertureEnum::SimpleBladedAperture(SimpleBladedAperture::new(6, 1.3)),
         scene_mode: SceneMode::PinLight,
-        view_mode: ViewMode::Film.cycle(),
+        view_mode: ViewMode::XRay {
+            bounds: Bounds2D::new((-400.0, 200.0).into(), (-200.0, 200.0).into()),
+        },
         paused: false,
-        samples: 1,
+        samples: 100,
         film_position: -lens_assembly.total_thickness_at(lens_zoom),
         min_film_position: lens_assembly.lenses.last().unwrap().thickness_short
             - lens_assembly.total_thickness_at(lens_zoom),
         lens_zoom: 0.0,
         maybe_sender: None,
         maybe_receiver: None,
+        use_sampler: true,
         dirty: false,
         efficiency: 0.0,
         total_samples: 0,

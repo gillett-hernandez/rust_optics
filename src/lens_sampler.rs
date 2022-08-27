@@ -58,6 +58,7 @@ impl RadialSampler {
                     Input::new(ray, lambda / 1000.0),
                     1.0,
                     |e| (aperture.intersects(aperture_radius, e), false),
+                    crate::noop,
                 );
                 if let Some(Output { .. }) = result {
                     // found good direction, so break
@@ -86,6 +87,7 @@ impl RadialSampler {
                         Input::new(ray, lambda / 1000.0),
                         1.0,
                         |e| (aperture.intersects(aperture_radius, e), false),
+                        crate::noop,
                     );
                     if result.is_some() {
                         // found good direction. keep expanding.
@@ -238,6 +240,7 @@ mod test {
             ),
             1.001,
             |e| (aperture.intersects(aperture_radius, e), false),
+            crate::noop,
         );
 
         let film_position = assembly.total_thickness_at(0.0);
