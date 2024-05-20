@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::curves::{parse_curve, CurveData};
-use crate::dev::film::Film;
+use crate::vec2d::Vec2D;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
@@ -26,13 +26,13 @@ pub struct TextureStackData {
     pub texture_stack: Vec<TextureData>,
 }
 
-pub fn parse_rgba(filepath: &str) -> Film<f32x4> {
+pub fn parse_rgba(filepath: &str) -> Vec2D<f32x4> {
     println!("parsing rgba texture at {}", filepath);
     let path = Path::new(filepath);
     let img = image::open(path).unwrap();
     let rgba_image = img.into_rgba8();
     let (width, height) = rgba_image.dimensions();
-    let mut new_film = Film::new(width as usize, height as usize, f32x4::splat(0.0));
+    let mut new_film = Vec2D::new(width as usize, height as usize, f32x4::splat(0.0));
     for (x, y, pixel) in rgba_image.enumerate_pixels() {
         let [r, g, b, a]: [u8; 4] = pixel.0.into();
         new_film.write_at(
@@ -49,13 +49,13 @@ pub fn parse_rgba(filepath: &str) -> Film<f32x4> {
     new_film
 }
 
-pub fn parse_bitmap(filepath: &str) -> Film<f32> {
+pub fn parse_bitmap(filepath: &str) -> Vec2D<f32> {
     println!("parsing greyscale texture at {}", filepath);
     let path = Path::new(filepath);
     let img = image::open(path).unwrap();
     let greyscale = img.into_luma8();
     let (width, height) = greyscale.dimensions();
-    let mut new_film = Film::new(width as usize, height as usize, 0.0);
+    let mut new_film = Vec2D::new(width as usize, height as usize, 0.0);
     for (x, y, pixel) in greyscale.enumerate_pixels() {
         let grey: [u8; 1] = pixel.0.into();
         new_film.write_at(x as usize, y as usize, grey[0] as f32 / 256.0);
@@ -63,10 +63,10 @@ pub fn parse_bitmap(filepath: &str) -> Film<f32> {
     new_film
 }
 
-pub fn select_channel(film: &Film<f32x4>, channel: usize) -> Film<f32> {
+pub fn select_channel(film: &Vec2D<f32x4>, channel: usize) -> Vec2D<f32> {
     assert!(channel < 4);
 
-    Film {
+    Vec2D {
         buffer: film.buffer.iter().map(|v| v[channel]).collect(),
         width: film.width,
         height: film.height,
@@ -114,14 +114,14 @@ pub fn triple_to_u32(triple: (u8, u8, u8)) -> u32 {
     c
 }
 
-pub fn attempt_write(film: &mut Film<u32>, px: usize, py: usize, c: u32) {
+pub fn attempt_write(film: &mut Vec2D<u32>, px: usize, py: usize, c: u32) {
     if py * film.width + px >= film.buffer.len() {
         return;
     }
     film.buffer[py * film.width + px] = c;
 }
 
-pub fn blit_circle(film: &mut Film<u32>, radius: f32, x: usize, y: usize, c: u32) {
+pub fn blit_circle(film: &mut Vec2D<u32>, radius: f32, x: usize, y: usize, c: u32) {
     let approx_pixel_circumference = radius as f32 * std::f32::consts::TAU;
 
     let pixel_x_size = 1.0 / film.width as f32;
@@ -146,7 +146,7 @@ pub fn blit_circle(film: &mut Film<u32>, radius: f32, x: usize, y: usize, c: u32
 #[derive(Clone)]
 pub struct Texture4 {
     pub curves: [CurveWithCDF; 4],
-    pub texture: Film<f32x4>,
+    pub texture: Vec2D<f32x4>,
     pub interpolation_mode: InterpolationMode,
 }
 
@@ -168,7 +168,7 @@ impl Texture4 {
 #[derive(Clone)]
 pub struct Texture1 {
     pub curve: CurveWithCDF,
-    pub texture: Film<f32>,
+    pub texture: Vec2D<f32>,
     pub interpolation_mode: InterpolationMode,
 }
 

@@ -1,12 +1,13 @@
 use ::math::bounds::Bounds1D;
 
 use crate::aperture::Aperture;
+use crate::vec2d::Vec2D;
 use crate::math::*;
 use crate::*;
 
 #[derive(Debug, Clone)]
 pub struct RadialSampler {
-    pub cache: Film<f32x4>,
+    pub cache: Vec2D<f32x4>,
     pub sensor_size: f32,
     pub wavelength_bounds: Bounds1D,
     pub wavelength_bins: usize,
@@ -31,7 +32,7 @@ impl RadialSampler {
         A: Send + Sync + Aperture,
     {
         // create film of f32x4s
-        let mut film = Film::new(radius_bins, wavelength_bins, f32x4::splat(0.0));
+        let mut film = Vec2D::new(radius_bins, wavelength_bins, f32x4::splat(0.0));
         let aperture_radius = lens_assembly.aperture_radius();
         film.buffer.par_iter_mut().enumerate().for_each(|(i, v)| {
             let radius_bin = i % radius_bins;

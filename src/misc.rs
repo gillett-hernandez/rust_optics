@@ -1,5 +1,4 @@
-#[cfg(feature = "dev")]
-use crate::dev::film::Film;
+use crate::vec2d::Vec2D;
 pub use crate::math::*;
 #[cfg(feature = "dev")]
 use line_drawing;
@@ -75,7 +74,7 @@ pub enum DrawMode {
 
 #[cfg(feature = "dev")]
 pub fn draw_line(
-    film: &mut Film<XYZColor>,
+    film: &mut Vec2D<XYZColor>,
     clip_window: Bounds2D,
     pt0: Point3,
     pt1: Point3,

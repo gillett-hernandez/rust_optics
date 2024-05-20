@@ -1,6 +1,6 @@
 #![allow(unused, unused_imports)]
 
-use crate::dev::film::Film;
+use crate::vec2d::Vec2D;
 use crate::math::*;
 
 // extern crate exr;
@@ -10,7 +10,7 @@ use nalgebra::{Matrix3, Vector3};
 use std::time::Instant;
 
 pub trait Tonemapper {
-    fn map(&self, film: &Film<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4);
+    fn map(&self, film: &Vec2D<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4);
     // fn write_to_files(&self, film: &Film<XYZColor>, exr_filename: &str, png_filename: &str);
 }
 
@@ -22,7 +22,7 @@ pub struct sRGB {
 }
 
 impl sRGB {
-    pub fn new(film: &Film<XYZColor>, exposure_adjustment: f32) -> Self {
+    pub fn new(film: &Vec2D<XYZColor>, exposure_adjustment: f32) -> Self {
         let mut max_luminance = 0.0;
         let mut total_luminance = 0.0;
         for y in 0..film.height {
@@ -56,7 +56,7 @@ impl sRGB {
 }
 
 impl Tonemapper for sRGB {
-    fn map(&self, film: &Film<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4) {
+    fn map(&self, film: &Vec2D<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4) {
         let cie_xyz_color = film.at(pixel.0, pixel.1);
         let mut scaled_cie_xyz_color = cie_xyz_color * self.factor * self.exposure_adjustment;
         if !scaled_cie_xyz_color.0.is_finite().all() {

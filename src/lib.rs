@@ -7,14 +7,12 @@ use rayon::prelude::*;
 pub mod aperture;
 #[cfg(feature = "dev")]
 pub mod dev;
+pub mod vec2d;
 pub mod lens;
 pub mod lens_sampler;
 pub mod math;
 pub mod misc;
 pub mod spectrum;
-
-#[cfg(feature = "dev")]
-use dev::film::Film;
 
 use crate::aperture::*;
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};

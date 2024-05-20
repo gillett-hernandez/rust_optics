@@ -18,12 +18,12 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 // use rand::prelude::*;
 use eframe::egui;
 // use egui::prelude::*;
+use crate::dev::parsing::*;
+use crate::vec2d::Vec2D;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use optics::lens_sampler::RadialSampler;
 use rayon::prelude::*;
-
-use crate::dev::{film::Film, parsing::*};
 // use lens_sampler::RadialSampler;
 use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
 use optics::*;
@@ -630,8 +630,8 @@ fn run_simulation(
         panic!("{}", e);
     });
 
-    let mut film = Film::new(width, height, XYZColor::BLACK);
-    let mut window_pixels = Film::new(width, height, 0u32);
+    let mut film = Vec2D::new(width, height, XYZColor::BLACK);
+    let mut window_pixels = Vec2D::new(width, height, 0u32);
 
     // Limit to max ~144 fps update rate
     let width = film.width;

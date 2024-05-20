@@ -18,7 +18,8 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use rayon::prelude::*;
 
-use crate::dev::{film::Film, parsing::*};
+use crate::dev::parsing::*;
+use crate::vec2d::Vec2D;
 use crate::math::{SingleWavelength, XYZColor};
 // use lens_sampler::RadialSampler;
 use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
@@ -564,8 +565,8 @@ fn run_simulation(
         panic!("{}", e);
     });
 
-    let mut film = Film::new(window_width, window_height, XYZColor::BLACK);
-    let mut window_pixels = Film::new(window_width, window_height, 0u32);
+    let mut film = Vec2D::new(window_width, window_height, XYZColor::BLACK);
+    let mut window_pixels = Vec2D::new(window_width, window_height, 0u32);
 
     // Limit to max ~144 fps update rate
     window.limit_update_rate(Some(std::time::Duration::from_micros(6944)));

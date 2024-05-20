@@ -732,13 +732,13 @@ mod test {
         println!("{:?}", av1 * av2);
     }
 
-    fn basic_incoming_ray() -> Ray {
-        Ray::new(Point3::new(0.1, 0.0, 10.0), -Vec3::Z)
+    fn basic_incoming_ray(z_position: f32) -> Ray {
+        Ray::new(Point3::new(0.1, 0.0, z_position), -Vec3::Z)
     }
 
-    fn random_incoming_ray() -> Ray {
+    fn random_incoming_ray(z_position: f32) -> Ray {
         Ray::new(
-            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, z_position),
             Vec3::new(random::<f32>() - 0.5, random::<f32>() - 0.5, -100.0).normalized(),
         )
     }
@@ -756,7 +756,7 @@ mod test {
     }
 
     fn basic_sphere_input(radius: f32) -> Input<SphereRay> {
-        let incoming = random_incoming_ray();
+        let incoming = random_incoming_ray(10.0);
         Input::new(camera_space_to_sphere(incoming, -radius, radius), 0.45)
     }
 
@@ -774,7 +774,7 @@ mod test {
     }
     #[test]
     fn test_trace_spherical() {
-        let incoming = basic_incoming_ray();
+        let incoming = basic_incoming_ray(10.0);
         println!("testing trace spherical with given input {:?}", incoming);
         let result = trace_spherical(incoming, 0.9, -1.0, 0.9);
         match result {
@@ -788,21 +788,21 @@ mod test {
     }
     #[test]
     fn test_evaluate_aspherical() {
-        let incoming_ray = basic_incoming_ray();
+        let incoming_ray = basic_incoming_ray(10.0);
         println!("testing evaluate aspherical with given incoming_ray");
         let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
         println!("{}", result);
     }
     #[test]
     fn test_evaluate_aspherical_derivative() {
-        let incoming_ray = basic_incoming_ray();
+        let incoming_ray = basic_incoming_ray(10.0);
         println!("testing evaluate aspherical_derivative with given incoming_ray");
         let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
         println!("{}", result);
     }
     #[test]
     fn test_trace_aspherical() {
-        let incoming = basic_incoming_ray();
+        let incoming = basic_incoming_ray(10.0);
 
         println!("testing trace aspherical with given input");
         let result = trace_aspherical(incoming, 0.9, 1.0, 1, f32x4::ZERO, 0.9);
@@ -817,7 +817,7 @@ mod test {
     }
     #[test]
     fn test_trace_cylindrical() {
-        let incoming = basic_incoming_ray();
+        let incoming = basic_incoming_ray(10.0);
         println!("testing trace cylindrical with given input");
         let trace_result = trace_cylindrical(incoming, 0.9, 1.0, 0.9);
         match trace_result {
@@ -831,7 +831,7 @@ mod test {
     }
     #[test]
     fn test_plane_space() {
-        let incoming = basic_incoming_ray();
+        let incoming = random_incoming_ray(1.0);
         println!("{:?}", incoming);
 
         println!("testing camera space to plane space and back with given ray");
@@ -859,7 +859,7 @@ mod test {
     #[test]
     fn test_refract_and_fresnel() {
         // basic input is a vector near the origin, with z component 0, pointing nearly straight downward (negative Z-ward)
-        let input = basic_incoming_ray();
+        let input = basic_incoming_ray(10.0);
         println!("{:?}", input);
         let mut trace_result = trace_spherical(input, 40.0, -42.0, 30.0).unwrap();
 
@@ -908,7 +908,7 @@ mod test {
             "total lens thiccness is {}",
             assembly.total_thickness_at(0.0)
         );
-        let incoming_ray = basic_incoming_ray();
+        let incoming_ray = basic_incoming_ray(10.0);
         let aperture_radius = assembly.aperture_radius() / 3.0;
         let aperture = SimpleBladedAperture::new(6, 0.5);
         let r = assembly.trace_reverse(
