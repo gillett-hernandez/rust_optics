@@ -13,6 +13,7 @@ pub mod math;
 pub mod misc;
 pub mod spectrum;
 
+#[cfg(feature = "dev")]
 use dev::film::Film;
 
 use crate::aperture::*;
