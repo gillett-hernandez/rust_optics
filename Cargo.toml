@@ -2,41 +2,39 @@
 name = "rust_optics"
 version = "0.1.0"
 authors = ["Gillett Hernandez <gillett.hernandez@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [features]
 dev = ["line_drawing"]
 
 
 [dependencies]
-# image = "0.24.3"
-itertools = "0.10.3"
-math =  { tag = "v0.3.0", git = "https://github.com/gillett-hernandez/rust_cg_math" }
-minifb = "0.23.0"
-nalgebra = "0.31.1"
-num_cpus = "1.13.1"
-ordered-float = "3.0.0"
-packed_simd = { version = "0.3.8", package = "packed_simd_2" }
-paw = "1.0"
-rand = "0.8.5"
-rayon = "1.5.3"
-serde = { version = "1.0.140", features = ["derive"] }
-toml = "0.5.9"
-subcrate = {path = "./subcrate"}
-line_drawing = {version = "1.0.0", optional=true}
-# regex = "1.6.0"
+itertools = "~0.13"
+math = { git = "https://github.com/gillett-hernandez/rust_cg_math" }
+minifb = "~0.26"
+nalgebra = "~0.32"
+num_cpus = "~1.16"
+ordered-float = "~4.2"
+paw = "~1.0"
+rand = "~0.8"
+rayon = "~1.10"
+serde = { version = "~1.0", features = ["derive"] }
+toml = "~0.8"
+image = { version = "~0.25", optional = true }
+line_drawing = { version = "~1.0", optional = true }
 
 [dev-dependencies]
-crossbeam  = "*"
-structopt = { version = "0.3.26", features = [ "paw" ] }
-linefeed = "0.6.0"
-egui = "*"
-eframe = "*"
-egui_extras = "*"
-line_drawing = "1.0.0"
+crossbeam = "*"
+structopt = { version = "~0.3", features = ["paw"] }
+linefeed = "~0.6"
+egui = "~0.27"
+eframe = "~0.27"
+egui_extras = "~0.27"
+line_drawing = "~1.0"
+
 
 [build-dependencies]
-serde = { version = "1.0.140", features = ["derive"] }
+serde = { version = "~1.0", features = ["derive"] }
 
 [lib]
 name = "optics"
@@ -49,12 +47,3 @@ required-features = ["dev"]
 [[example]]
 name = "reverse_tracing"
 required-features = ["dev"]
-
-
-[profile.dev]
-opt-level = 2
-panic='abort'
-debug=true
-
-[profile.test]
-opt-level = 0

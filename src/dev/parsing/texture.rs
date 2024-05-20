@@ -1,12 +1,11 @@
-use math::{curves::InterpolationMode, CurveWithCDF, SpectralPowerDistributionFunction, Bounds1D};
+use crate::math::*;
 
-use packed_simd::f32x4;
 use serde::{Deserialize, Serialize};
 
 use std::path::Path;
 
 use super::curves::{parse_curve, CurveData};
-use crate::film::Film;
+use crate::dev::film::Film;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
@@ -39,12 +38,12 @@ pub fn parse_rgba(filepath: &str) -> Film<f32x4> {
         new_film.write_at(
             x as usize,
             y as usize,
-            f32x4::new(
+            f32x4::from_array([
                 r as f32 / 256.0,
                 g as f32 / 256.0,
                 b as f32 / 256.0,
                 a as f32 / 256.0,
-            ),
+            ]),
         );
     }
     new_film
@@ -68,7 +67,7 @@ pub fn select_channel(film: &Film<f32x4>, channel: usize) -> Film<f32> {
     assert!(channel < 4);
 
     Film {
-        buffer: film.buffer.iter().map(|v| v.extract(channel)).collect(),
+        buffer: film.buffer.iter().map(|v| v[channel]).collect(),
         width: film.width,
         height: film.height,
     }
@@ -157,13 +156,13 @@ impl Texture4 {
     pub fn eval_at(&self, lambda: f32, uv: (f32, f32)) -> f32 {
         // TODO: bilinear or bicubic texture interpolation/filtering
         let factors = self.texture.at_uv(uv);
-        let eval = f32x4::new(
+        let eval = f32x4::from_array([
             self.curves[0].evaluate_power(lambda),
             self.curves[1].evaluate_power(lambda),
             self.curves[2].evaluate_power(lambda),
             self.curves[3].evaluate_power(lambda),
-        );
-        (factors * eval).sum()
+        ]);
+        (factors * eval).reduce_sum()
     }
 }
 #[derive(Clone)]

@@ -1,9 +1,8 @@
-pub use crate::math::{Input, Output, PlaneRay, SphereRay};
+#[cfg(feature = "dev")]
+use crate::dev::film::Film;
+pub use crate::math::*;
 #[cfg(feature = "dev")]
 use line_drawing;
-use math::*;
-#[cfg(feature = "dev")]
-use subcrate::film::Film;
 
 pub trait Cycle {
     fn cycle(self) -> Self;
@@ -161,7 +160,7 @@ pub fn draw_line(
                 }
                 assert!(!b.is_nan(), "{} {}", dx, dy);
                 film.buffer[y as usize * film_width + x as usize] +=
-                    XYZColor::from(we.replace_energy((we.energy.0 * b).into()));
+                    XYZColor::from(we.replace_energy((we.energy * b).into()));
             }
         }
         DrawMode::XiaolinWu => {
@@ -175,7 +174,7 @@ pub fn draw_line(
                 }
                 assert!(!b.is_nan(), "{} {}", dx, dy);
                 film.buffer[y as usize * film_width + x as usize] +=
-                    XYZColor::from(we.replace_energy((we.energy.0 * a * b).into()));
+                    XYZColor::from(we.replace_energy((we.energy * a * b).into()));
             }
         }
         DrawMode::Bresenham => {
@@ -188,7 +187,7 @@ pub fn draw_line(
                 }
                 assert!(!b.is_nan(), "{} {}", dx, dy);
                 film.buffer[y as usize * film_width + x as usize] +=
-                    XYZColor::from(we.replace_energy((we.energy.0 * b).into()));
+                    XYZColor::from(we.replace_energy((we.energy * b).into()));
             }
         }
     }

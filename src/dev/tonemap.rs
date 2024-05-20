@@ -1,12 +1,11 @@
 #![allow(unused, unused_imports)]
 
-use crate::film::Film;
-use math::XYZColor;
+use crate::dev::film::Film;
+use crate::math::*;
 
 // extern crate exr;
 // use exr::prelude::rgba_image::*;
 use nalgebra::{Matrix3, Vector3};
-use packed_simd::f32x4;
 
 use std::time::Instant;
 
@@ -78,18 +77,19 @@ impl Tonemapper for sRGB {
         let [x, y, z, _]: [f32; 4] = scaled_cie_xyz_color.0.into();
         let intermediate = xyz_to_rgb * Vector3::new(x, y, z);
 
-        let rgb_linear = f32x4::new(intermediate[0], intermediate[1], intermediate[2], 0.0);
-        const S313: f32x4 = f32x4::splat(0.0031308);
-        const S323_25: f32x4 = f32x4::splat(323.0 / 25.0);
-        const S5_12: f32x4 = f32x4::splat(5.0 / 12.0);
-        const S211: f32x4 = f32x4::splat(211.0);
-        const S11: f32x4 = f32x4::splat(11.0);
-        const S200: f32x4 = f32x4::splat(200.0);
-        let srgb = (rgb_linear.lt(S313)).select(
+        let rgb_linear =
+            f32x4::from_array([intermediate[0], intermediate[1], intermediate[2], 0.0]);
+        let S313: f32x4 = f32x4::splat(0.0031308);
+        let S323_25: f32x4 = f32x4::splat(323.0 / 25.0);
+        let S5_12: f32x4 = f32x4::splat(5.0 / 12.0);
+        let S211: f32x4 = f32x4::splat(211.0);
+        let S11: f32x4 = f32x4::splat(11.0);
+        let S200: f32x4 = f32x4::splat(200.0);
+        let srgb = (rgb_linear.simd_lt(S313)).select(
             S323_25 * rgb_linear,
             (S211 * rgb_linear.powf(S5_12) - S11) / S200,
         );
-        (srgb, rgb_linear / self.factor)
+        (srgb, rgb_linear / f32x4::splat(self.factor))
     }
     // fn write_to_files(&self, film: &Film<XYZColor>, exr_filename: &str, png_filename: &str) {
     //     let now = Instant::now();

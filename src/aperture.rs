@@ -1,4 +1,4 @@
-use math::{Ray, Vec3};
+use math::prelude::*;
 
 pub trait Aperture {
     fn intersects(&self, aperture_radius: f32, ray: Ray) -> bool;
@@ -33,7 +33,7 @@ impl Aperture for SimpleBladedAperture {
                 let top = Vec3::new(phi.cos(), phi.sin(), 0.0);
                 let bottom = Vec3::new(phi.cos(), -phi.sin(), 0.0);
                 let mut point = Vec3::from(ray.origin);
-                point.0 = point.0.replace(2, 0.0);
+                point.0[2] = 0.0;
                 let normalized = point.normalized();
                 let cos_top = normalized * top;
                 let cos_bottom = normalized * bottom;

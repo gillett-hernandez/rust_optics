@@ -1,8 +1,6 @@
 extern crate serde;
 
-use math::Bounds1D;
-use math::{curves::InterpolationMode, Curve};
-use math::spectral::EXTENDED_VISIBLE_RANGE;
+use crate::math::*;
 
 use std::error::Error;
 use std::fs::File;
@@ -11,6 +9,7 @@ use std::io::Read;
 // use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
+use math::spectral::EXTENDED_VISIBLE_RANGE;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]

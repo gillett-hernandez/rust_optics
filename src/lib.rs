@@ -1,18 +1,19 @@
-// #![feature(slice_fill)]
+#![feature(portable_simd)]
 extern crate minifb;
-#[macro_use]
-extern crate packed_simd;
 
+use ::math::prelude::*;
 use rayon::prelude::*;
 
 pub mod aperture;
+#[cfg(feature = "dev")]
+pub mod dev;
 pub mod lens;
 pub mod lens_sampler;
 pub mod math;
 pub mod misc;
 pub mod spectrum;
 
-use subcrate::film::Film;
+use dev::film::Film;
 
 use crate::aperture::*;
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};
@@ -22,8 +23,9 @@ pub use lens::*;
 pub extern crate nalgebra as na;
 pub use na::{Matrix3, Vector3};
 
-#[cfg(feature = "build-binary")]
+#[cfg(feature = "dev")]
 use std::collections::HashMap;
+
 use std::f32::{
     consts::{SQRT_2, TAU},
     EPSILON,
@@ -40,7 +42,7 @@ fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
             *input,
             1.04,
             |ray| (aperture.intersects(aperture_radius, ray), false),
-            noop,
+            drop,
         );
         if output.is_none() {
             failed += 1;
@@ -67,7 +69,7 @@ fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
             *input,
             1.04,
             |ray| (aperture.intersects(aperture_radius, ray), false),
-            noop,
+            drop,
         );
         if output.is_none() {
             failed += 1;
@@ -99,8 +101,6 @@ pub fn parse_lenses_from(spec: &str) -> (Vec<LensInterface>, f32, f32) {
     }
     (lenses, last_ior, last_vno)
 }
-
-pub fn noop<A>(arg: A) {}
 
 #[cfg(test)]
 mod test {

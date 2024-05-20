@@ -1,9 +1,10 @@
-pub use packed_simd::f32x4;
-
-#[allow(non_upper_case_globals)]
-pub const f32x4_ZERO: f32x4 = f32x4::new(0.0, 0.0, 0.0, 0.0);
-
-pub use math::*;
+pub use math::prelude::*;
+pub use std::simd::{
+    cmp::{SimdPartialEq, SimdPartialOrd},
+    f32x4,
+    num::{SimdFloat, SimdInt},
+    simd_swizzle, StdFloat,
+};
 
 #[derive(Copy, Clone, Debug)]
 pub struct Input<T> {
@@ -35,19 +36,19 @@ pub struct PlaneRay(pub f32x4);
 
 impl PlaneRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self(f32x4::new(x, y, dx, dy))
+        Self(f32x4::from_array([x, y, dx, dy]))
     }
     pub fn x(&self) -> f32 {
-        self.0.extract(0)
+        self.0[0]
     }
     pub fn y(&self) -> f32 {
-        self.0.extract(1)
+        self.0[1]
     }
     pub fn dx(&self) -> f32 {
-        self.0.extract(2)
+        self.0[2]
     }
     pub fn dy(&self) -> f32 {
-        self.0.extract(3)
+        self.0[3]
     }
 }
 
@@ -56,19 +57,19 @@ pub struct SphereRay(pub f32x4);
 
 impl SphereRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self(f32x4::new(x, y, dx, dy))
+        Self(f32x4::from_array([x, y, dx, dy]))
     }
     pub fn x(&self) -> f32 {
-        self.0.extract(0)
+        self.0[0]
     }
     pub fn y(&self) -> f32 {
-        self.0.extract(1)
+        self.0[1]
     }
     pub fn dx(&self) -> f32 {
-        self.0.extract(2)
+        self.0[2]
     }
     pub fn dy(&self) -> f32 {
-        self.0.extract(3)
+        self.0[3]
     }
 }
 

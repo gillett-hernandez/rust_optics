@@ -1,3 +1,5 @@
+use ::math::bounds::Bounds1D;
+
 use crate::aperture::Aperture;
 use crate::math::*;
 use crate::*;
@@ -58,7 +60,7 @@ impl RadialSampler {
                     Input::new(ray, lambda / 1000.0),
                     1.0,
                     |e| (aperture.intersects(aperture_radius, e), false),
-                    crate::noop,
+                    drop,
                 );
                 if let Some(Output { .. }) = result {
                     // found good direction, so break
@@ -87,7 +89,7 @@ impl RadialSampler {
                         Input::new(ray, lambda / 1000.0),
                         1.0,
                         |e| (aperture.intersects(aperture_radius, e), false),
-                        crate::noop,
+                        drop,
                     );
                     if result.is_some() {
                         // found good direction. keep expanding.
@@ -111,7 +113,7 @@ impl RadialSampler {
                 0.0
             };
 
-            *v = f32x4::new(avg_angle, (max_angle - min_angle).abs() / 2.0, 0.0, 0.0);
+            *v = f32x4::from_array([avg_angle, (max_angle - min_angle).abs() / 2.0, 0.0, 0.0]);
         });
         RadialSampler {
             cache: film,
@@ -158,43 +160,43 @@ impl RadialSampler {
             v - d_y_idx as f32 / self.wavelength_bins as f32,
         );
 
-        // let (phi, dphi) = (angles00.extract(0), angles00.extract(1));
+        // let (phi, dphi) = (angles00[0], angles00[1]);
 
         // direct lookup through uv
         // let [phi, dphi, _, _]: [f32; 4] = direction_cache_film.at_uv((u, v)).into();
 
         debug_assert!(du.is_finite(), "{}", du);
         debug_assert!(dv.is_finite(), "{}", dv);
-        debug_assert!(angles00.extract(0).is_finite(), "{:?}", angles00);
-        debug_assert!(angles01.extract(0).is_finite(), "{:?}", angles01);
-        debug_assert!(angles10.extract(0).is_finite(), "{:?}", angles10);
-        debug_assert!(angles11.extract(0).is_finite(), "{:?}", angles11);
-        debug_assert!(angles00.extract(1).is_finite(), "{:?}", angles00);
-        debug_assert!(angles01.extract(1).is_finite(), "{:?}", angles01);
-        debug_assert!(angles10.extract(1).is_finite(), "{:?}", angles10);
-        debug_assert!(angles11.extract(1).is_finite(), "{:?}", angles11);
+        debug_assert!(angles00[0].is_finite(), "{:?}", angles00);
+        debug_assert!(angles01[0].is_finite(), "{:?}", angles01);
+        debug_assert!(angles10[0].is_finite(), "{:?}", angles10);
+        debug_assert!(angles11[0].is_finite(), "{:?}", angles11);
+        debug_assert!(angles00[1].is_finite(), "{:?}", angles00);
+        debug_assert!(angles01[1].is_finite(), "{:?}", angles01);
+        debug_assert!(angles10[1].is_finite(), "{:?}", angles10);
+        debug_assert!(angles11[1].is_finite(), "{:?}", angles11);
         // bilinear interpolation
         let (phi, dphi) = (
-            (1.0 - du) * (1.0 - dv) * angles00.extract(0)
-                + du * (1.0 - dv) * angles01.extract(0)
-                + dv * (1.0 - du) * angles10.extract(0)
-                + du * dv * angles11.extract(0),
-            (1.0 - du) * (1.0 - dv) * angles00.extract(1)
-                + du * (1.0 - dv) * angles01.extract(1)
-                + dv * (1.0 - du) * angles10.extract(1)
-                + du * dv * angles11.extract(1),
+            (1.0 - du) * (1.0 - dv) * angles00[0]
+                + du * (1.0 - dv) * angles01[0]
+                + dv * (1.0 - du) * angles10[0]
+                + du * dv * angles11[0],
+            (1.0 - du) * (1.0 - dv) * angles00[1]
+                + du * (1.0 - dv) * angles01[1]
+                + dv * (1.0 - du) * angles10[1]
+                + du * dv * angles11[1],
         );
 
         // direction is pointing towards the center somewhat and assumes direction.y() == 0.0
         // thus rotate to match actual central point of ray.
 
         let dx = -phi.sin();
-        let direction = Vec3(f32x4::new(
+        let direction = Vec3(f32x4::from_array([
             dx * rotation_angle.cos(),
             dx * rotation_angle.sin(),
             phi.cos(),
             0.0,
-        ));
+        ]));
         debug_assert!(phi.is_finite(), "{}", phi);
         debug_assert!(rotation_angle.is_finite());
         debug_assert!(dx.is_finite(), "{}", dx);
@@ -204,7 +206,7 @@ impl RadialSampler {
         // choose direction somehow
 
         let s2d = s0;
-        let frame = TangentFrame::from_normal(Vec3(direction.0.replace(3, 0.0)));
+        let frame = TangentFrame::from_normal(Vec3(direction.0 * Vec3::MASK));
         let phi = s1.x * TAU;
         let r = s2d.x.sqrt() * radius;
         debug_assert!(!r.is_nan());
@@ -228,7 +230,7 @@ mod test {
         let mut camera_spec = String::new();
         camera_file.read_to_string(&mut camera_spec).unwrap();
         let (interfaces, _, _) = parse_lenses_from(&camera_spec);
-        let assembly = LensAssembly::new(&interfaces).as_debug();
+        let assembly = LensAssembly::new(interfaces.as_slice()).as_debug();
         let aperture_radius = assembly.aperture_radius();
         let aperture = SimpleBladedAperture::new(6, 0.5);
 
@@ -240,7 +242,7 @@ mod test {
             ),
             1.001,
             |e| (aperture.intersects(aperture_radius, e), false),
-            crate::noop,
+            drop,
         );
 
         let film_position = assembly.total_thickness_at(0.0);

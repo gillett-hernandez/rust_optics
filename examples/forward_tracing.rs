@@ -1,5 +1,7 @@
+#![feature(portable_simd)]
+
 use std::collections::HashMap;
-use std::f32::consts::SQRT_2;
+use std::f32::consts::{PI, SQRT_2};
 use std::f32::EPSILON;
 use std::ops::RangeInclusive;
 use std::sync::atomic::AtomicBool;
@@ -7,7 +9,8 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
 
-use ::math::{f32x4, random, random_cosine_direction, Bounds2D, PI};
+pub use crate::math::*;
+use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 // use crate::math::Sample2D;
 #[allow(unused_imports)]
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
@@ -18,16 +21,12 @@ use eframe::egui;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use optics::lens_sampler::RadialSampler;
-use packed_simd::shuffle;
 use rayon::prelude::*;
 
-use crate::math::{SingleWavelength, XYZColor};
-use subcrate::{film::Film, parsing::*};
+use crate::dev::{film::Film, parsing::*};
 // use lens_sampler::RadialSampler;
 use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
 use optics::*;
-
-use crate::math::spectral::BOUNDED_VISIBLE_RANGE;
 
 use structopt::StructOpt;
 
@@ -237,17 +236,17 @@ impl SimulationState {
                         }
                         SceneMode::SpotLight { pos, size, span } => match tail {
                             "pos.x" => {
-                                pos.0 = pos.0.replace(0, v);
+                                pos.0[0] = v;
                                 println!("pos = {:?}", pos.0);
                                 self.dirty = true;
                             }
                             "pos.y" => {
-                                pos.0 = pos.0.replace(1, v);
+                                pos.0[1] = v;
                                 println!("pos = {:?}", pos.0);
                                 self.dirty = true;
                             }
                             "pos.z" => {
-                                pos.0 = pos.0.replace(2, v);
+                                pos.0[2] = v;
                                 println!("pos = {:?}", pos.0);
                                 self.dirty = true;
                             }
@@ -415,7 +414,7 @@ impl eframe::App for SimulationState {
                             .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(z)))
                             .unwrap();
                     }
-                    pos.0 = f32x4::new(x, y, z, 0.0);
+                    pos.0 = f32x4::from_array([x, y, z, 0.0]);
 
                     ui.label("size");
                     let response = ui.add(
@@ -606,7 +605,7 @@ fn run_simulation(
     receiver: Receiver<(String, Command)>,
     sender: Sender<(String, Command)>,
 ) {
-    use subcrate::tonemap::{sRGB, Tonemapper};
+    use dev::tonemap::{sRGB, Tonemapper};
 
     println!("{:?}", opt);
     let width = opt.width;
@@ -641,7 +640,7 @@ fn run_simulation(
 
     let scene = get_scene("textures.toml").unwrap();
 
-    window.limit_update_rate(Some(std::time::Duration::from_micros(6944)));
+    window.set_target_fps(144);
 
     let frame_dt = 6944.0 / 1000000.0;
 
@@ -775,7 +774,7 @@ fn run_simulation(
                                     false,
                                 )
                             },
-                            crate::noop,
+                            drop,
                         );
                         if let Some(Output { ray: pupil_ray, .. }) = result {
                             let dt = (-pupil_ray.origin.y()) / pupil_ray.direction.y();
@@ -870,7 +869,7 @@ fn run_simulation(
                                         false,
                                     )
                                 },
-                                crate::noop,
+                                drop,
                             );
                             if let Some(Output {
                                 ray: pupil_ray,
@@ -1015,7 +1014,7 @@ fn run_simulation(
                                     false,
                                 )
                             },
-                            crate::noop,
+                            drop,
                         );
                         if let Some(Output {
                             ray: pupil_ray,
@@ -1126,7 +1125,7 @@ fn run_simulation(
             }
             ViewMode::XRay { bounds } => {
                 let mut sampler = RandomSampler::new();
-                let swizzle_project = |pt| project(pt, Vec3::X, |v| shuffle!(v, [2, 1, 0, 3]));
+                let swizzle_project = |pt| project(pt, Vec3::X, |v| simd_swizzle!(v, [2, 1, 0, 3]));
                 for _ in 0..samples_per_iteration {
                     b += 1;
                     let (u, v) = {
@@ -1233,7 +1232,7 @@ fn main() {
 
     // let ui = egui();
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(500.0, 900.0)),
+        // initial_window_size: Some(egui::vec2(500.0, 900.0)),
         ..Default::default()
     };
 
@@ -1294,7 +1293,7 @@ fn main() {
         )
     });
 
-    eframe::run_native(
+    let _ = eframe::run_native(
         "Forward Tracer Control Panel",
         options,
         Box::new(|_cc| Box::new(simulation_state_egui)),

@@ -1,13 +1,6 @@
-use packed_simd::f32x4;
-
+pub use crate::math::*;
 use std::cmp::PartialEq;
 use std::f32::consts::TAU;
-
-pub use crate::math::f32x4_ZERO;
-pub use crate::math::{
-    Input, Output, PlaneRay, Point3, RandomSampler, Ray, Sample1D, Sample2D, Sample3D, Sampler,
-    SphereRay, StratifiedSampler, TangentFrame, Vec3,
-};
 
 const INTENSITY_EPS: f32 = 0.0001;
 
@@ -477,8 +470,9 @@ pub fn evaluate_aspherical(pos: Point3, r: f32, k: i32, correction: f32x4) -> f3
     let h6 = h4 * h2;
     let h8 = h4 * h4;
     let h10 = h8 * h2;
-    let corv = f32x4::new(h4, h6, h8, h10);
-    h * hr / (1.0 + (1.0 - (1.0 + k as f32) * hr * hr).max(0.0).sqrt()) + (correction * corv).sum()
+    let corv = f32x4::from_array([h4, h6, h8, h10]);
+    h * hr / (1.0 + (1.0 - (1.0 + k as f32) * hr * hr).max(0.0).sqrt())
+        + (correction * corv).reduce_sum()
 }
 
 pub fn evaluate_aspherical_derivative(pos: Point3, r: f32, k: i32, correction: f32x4) -> f32 {
@@ -492,12 +486,12 @@ pub fn evaluate_aspherical_derivative(pos: Point3, r: f32, k: i32, correction: f
     let h6 = h4 * h2;
     let h7 = h4 * h3;
     let h9 = h6 * h3;
-    let corv = f32x4::new(4.0 * h3, 6.0 * h5, 8.0 * h7, 10.0 * h9);
+    let corv = f32x4::from_array([4.0 * h3, 6.0 * h5, 8.0 * h7, 10.0 * h9]);
     let hr2 = hr * hr;
     let subexpr = (1.0 - (1.0 + k as f32) * hr2).max(0.0).sqrt();
     2.0 * hr / (1.0 + subexpr)
         + hr2 * hr * (k as f32 + 1.0) / (subexpr * (subexpr + 1.0).powf(2.0))
-        + (correction * corv).sum()
+        + (correction * corv).reduce_sum()
 }
 
 pub fn trace_aspherical(
@@ -533,7 +527,7 @@ pub fn trace_aspherical(
     let dz = evaluate_aspherical_derivative(ray.origin, rad, k, correction)
         * if normal.z() < 0.0 { -1.0 } else { 1.0 };
     let sqr = ray.origin.0 * ray.origin.0;
-    let new_r = (sqr.extract(0) + sqr.extract(1)).sqrt();
+    let new_r = (sqr[0] + sqr[1]).sqrt();
     let normal = Vec3::new(
         ray.origin.x() / new_r * dz,
         ray.origin.y() / new_r * dz,
@@ -565,7 +559,7 @@ pub fn trace_cylindrical(
     };
     ray = ray.at_time(t);
     let sqr = ray.origin.0 * ray.origin.0;
-    if sqr.extract(0) + sqr.extract(1) > housing_radius * housing_radius {
+    if sqr[0] + sqr[1] > housing_radius * housing_radius {
         return Err(8);
     }
     let normal = Vec3::new(ray.origin.x(), 0.0, ray.origin.z() - center) / r;
@@ -649,7 +643,7 @@ pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f3
     let temp_direction = ray_in.direction.normalized();
     let ex = Vec3::new(normal.z(), 0.0, -normal.x());
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
-    SphereRay(shuffle!(
+    SphereRay(simd_swizzle!(
         ray_in.origin.0,
         frame.to_local(&temp_direction).0,
         [0, 1, 4, 5]
@@ -690,7 +684,6 @@ pub fn sample_point_on_lens(radius: f32, housing_radius: f32, sample: Sample2D) 
 mod test {
 
     use crate::aperture::*;
-    use crate::noop;
     use crate::parse_lenses_from;
     use rand::random;
 
@@ -726,7 +719,7 @@ mod test {
             Input::new(Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::Z), 0.5),
             1.0,
             |_| (false, true),
-            noop,
+            drop,
         );
 
         println!("{:?}", output);
@@ -797,14 +790,14 @@ mod test {
     fn test_evaluate_aspherical() {
         let incoming_ray = basic_incoming_ray();
         println!("testing evaluate aspherical with given incoming_ray");
-        let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, f32x4_ZERO);
+        let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
         println!("{}", result);
     }
     #[test]
     fn test_evaluate_aspherical_derivative() {
         let incoming_ray = basic_incoming_ray();
         println!("testing evaluate aspherical_derivative with given incoming_ray");
-        let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, f32x4_ZERO);
+        let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
         println!("{}", result);
     }
     #[test]
@@ -812,7 +805,7 @@ mod test {
         let incoming = basic_incoming_ray();
 
         println!("testing trace aspherical with given input");
-        let result = trace_aspherical(incoming, 0.9, 1.0, 1, f32x4_ZERO, 0.9);
+        let result = trace_aspherical(incoming, 0.9, 1.0, 1, f32x4::ZERO, 0.9);
         match result {
             Ok((ray, normal)) => {
                 println!("{:?}, {:?}", ray, normal);
@@ -860,7 +853,7 @@ mod test {
         println!("{:?}", new_ray);
         let sphere = camera_space_to_sphere(new_ray, 0.0, 1.0);
         println!("{:?}", sphere);
-        assert!((sphere.0 - incoming.ray.0).abs().sum() < 0.000001);
+        assert!(SimdFloat::abs(sphere.0 - incoming.ray.0).reduce_sum() < 0.000001);
     }
 
     #[test]
@@ -923,7 +916,7 @@ mod test {
             Input::new(incoming_ray, 0.55),
             1.04,
             |e| (aperture.intersects(aperture_radius, e), false),
-            noop,
+            drop,
         );
         if let Some(o) = r {
             println!("{:?}", o);
