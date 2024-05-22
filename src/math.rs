@@ -1,5 +1,5 @@
-pub use math::prelude::*;
-pub use std::simd::{
+pub(crate) use math::prelude::*;
+pub(crate) use std::simd::{
     cmp::{SimdPartialEq, SimdPartialOrd},
     f32x4,
     num::{SimdFloat, SimdInt},

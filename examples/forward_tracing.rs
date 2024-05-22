@@ -1,15 +1,19 @@
 #![feature(portable_simd)]
 
-use std::collections::HashMap;
 use std::f32::consts::{PI, SQRT_2};
 use std::f32::EPSILON;
 use std::ops::RangeInclusive;
+use std::simd::{
+    cmp::{SimdPartialEq, SimdPartialOrd},
+    f32x4,
+    num::{SimdFloat, SimdInt},
+    simd_swizzle, StdFloat,
+};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
 
-pub use crate::math::*;
 use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 // use crate::math::Sample2D;
 #[allow(unused_imports)]
@@ -19,7 +23,9 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 use eframe::egui;
 // use egui::prelude::*;
 use crate::dev::parsing::*;
+use crate::math::*;
 use crate::vec2d::Vec2D;
+use ::math::prelude::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use optics::lens_sampler::RadialSampler;

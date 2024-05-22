@@ -1,10 +1,15 @@
 #![feature(portable_simd)]
 
-use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
+use std::simd::{
+    cmp::{SimdPartialEq, SimdPartialOrd},
+    f32x4,
+    num::{SimdFloat, SimdInt},
+    simd_swizzle, StdFloat,
+};
 
 use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 // use crate::math::Sample2D;
@@ -20,7 +25,7 @@ use rayon::prelude::*;
 
 use crate::dev::parsing::*;
 use crate::vec2d::Vec2D;
-use crate::math::{SingleWavelength, XYZColor};
+use ::math::prelude::*;
 // use lens_sampler::RadialSampler;
 use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
 use optics::*;

@@ -7,20 +7,20 @@ use rayon::prelude::*;
 pub mod aperture;
 #[cfg(feature = "dev")]
 pub mod dev;
-pub mod vec2d;
 pub mod lens;
 pub mod lens_sampler;
 pub mod math;
 pub mod misc;
 pub mod spectrum;
+pub mod vec2d;
 
-use crate::aperture::*;
+pub use crate::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 
-pub use lens::*;
+pub use lens::{sample_point_on_lens, LensAssembly, LensInterface, LensType};
 
 pub extern crate nalgebra as na;
-pub use na::{Matrix3, Vector3};
+pub(crate) use na::{Matrix3, Vector3};
 
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
