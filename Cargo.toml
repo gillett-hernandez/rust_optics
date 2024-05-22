@@ -11,7 +11,7 @@ dev = ["line_drawing"]
 [dependencies]
 itertools = "~0.13"
 math = { git = "https://github.com/gillett-hernandez/rust_cg_math" }
-minifb = "~0.26"
+minifb = "~0.27"
 nalgebra = "~0.32"
 num_cpus = "~1.16"
 ordered-float = "~4.2"
