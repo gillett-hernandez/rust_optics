@@ -40,7 +40,7 @@ fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
             0.0,
             *input,
             1.04,
-            |ray| (aperture.intersects(aperture_radius, ray), false),
+            |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
             drop,
         );
         if output.is_none() {
@@ -67,7 +67,7 @@ fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
             0.0,
             *input,
             1.04,
-            |ray| (aperture.intersects(aperture_radius, ray), false),
+            |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
             drop,
         );
         if output.is_none() {

@@ -774,9 +774,10 @@ fn run_simulation(
                             1.0,
                             |e| {
                                 (
-                                    local_simulation_state
-                                        .aperture
-                                        .intersects(local_simulation_state.aperture_radius, e),
+                                    local_simulation_state.aperture.is_rejected(
+                                        local_simulation_state.aperture_radius,
+                                        e.origin,
+                                    ),
                                     false,
                                 )
                             },
@@ -869,9 +870,10 @@ fn run_simulation(
                                 1.04,
                                 |e| {
                                     (
-                                        local_simulation_state
-                                            .aperture
-                                            .intersects(local_simulation_state.aperture_radius, e),
+                                        local_simulation_state.aperture.is_rejected(
+                                            local_simulation_state.aperture_radius,
+                                            e.origin,
+                                        ),
                                         false,
                                     )
                                 },
@@ -1014,9 +1016,10 @@ fn run_simulation(
                             1.0,
                             |e| {
                                 (
-                                    local_simulation_state
-                                        .aperture
-                                        .intersects(local_simulation_state.aperture_radius, e),
+                                    local_simulation_state.aperture.is_rejected(
+                                        local_simulation_state.aperture_radius,
+                                        e.origin,
+                                    ),
                                     false,
                                 )
                             },
@@ -1163,7 +1166,7 @@ fn run_simulation(
                             (
                                 local_simulation_state
                                     .aperture
-                                    .intersects(local_simulation_state.aperture_radius, e),
+                                    .is_rejected(local_simulation_state.aperture_radius, e.origin),
                                 false,
                             )
                         },

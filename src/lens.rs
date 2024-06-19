@@ -915,7 +915,7 @@ mod test {
             0.0,
             Input::new(incoming_ray, 0.55),
             1.04,
-            |e| (aperture.intersects(aperture_radius, e), false),
+            |e| (aperture.is_rejected(aperture_radius, e.origin), false),
             drop,
         );
         if let Some(o) = r {

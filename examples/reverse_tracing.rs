@@ -1,15 +1,15 @@
 #![feature(portable_simd)]
 
 use std::ops::RangeInclusive;
-use std::sync::{Arc, RwLock};
-use std::thread;
-use std::{f32::consts::TAU, fs::File, io::Read};
 use std::simd::{
     cmp::{SimdPartialEq, SimdPartialOrd},
     f32x4,
     num::{SimdFloat, SimdInt},
     simd_swizzle, StdFloat,
 };
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::{f32::consts::TAU, fs::File, io::Read};
 
 use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 // use crate::math::Sample2D;
@@ -812,7 +812,7 @@ fn run_simulation(
                             (
                                 local_simulation_state
                                     .aperture
-                                    .intersects(local_simulation_state.aperture_radius, e),
+                                    .is_rejected(local_simulation_state.aperture_radius, e.origin),
                                 false,
                             )
                         },
@@ -860,7 +860,7 @@ fn run_simulation(
                             (
                                 local_simulation_state
                                     .aperture
-                                    .intersects(local_simulation_state.aperture_radius, e),
+                                    .is_rejected(local_simulation_state.aperture_radius, e.origin),
                                 false,
                             )
                         },

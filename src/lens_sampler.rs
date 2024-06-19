@@ -1,8 +1,8 @@
 use ::math::bounds::Bounds1D;
 
 use crate::aperture::Aperture;
-use crate::vec2d::Vec2D;
 use crate::math::*;
+use crate::vec2d::Vec2D;
 use crate::*;
 
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ impl RadialSampler {
                     lens_zoom,
                     Input::new(ray, lambda / 1000.0),
                     1.0,
-                    |e| (aperture.intersects(aperture_radius, e), false),
+                    |e| (aperture.is_rejected(aperture_radius, e.origin), false),
                     drop,
                 );
                 if let Some(Output { .. }) = result {
@@ -89,7 +89,7 @@ impl RadialSampler {
                         lens_zoom,
                         Input::new(ray, lambda / 1000.0),
                         1.0,
-                        |e| (aperture.intersects(aperture_radius, e), false),
+                        |e| (aperture.is_rejected(aperture_radius, e.origin), false),
                         drop,
                     );
                     if result.is_some() {
@@ -242,7 +242,7 @@ mod test {
                 0.550,
             ),
             1.001,
-            |e| (aperture.intersects(aperture_radius, e), false),
+            |e| (aperture.is_rejected(aperture_radius, e.origin), false),
             drop,
         );
 

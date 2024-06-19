@@ -1,11 +1,11 @@
 [package]
 name = "rust_optics"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Gillett Hernandez <gillett.hernandez@gmail.com>"]
 edition = "2021"
 
 [features]
-dev = ["line_drawing"]
+dev = ["line_drawing", "image"]
 
 
 [dependencies]
