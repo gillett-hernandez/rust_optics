@@ -20,29 +20,25 @@ pub struct SimpleBladedAperture {
 
 impl SimpleBladedAperture {
     pub fn new(blades: u8, p: f32) -> Self {
-        assert!((-2.0..2.4).contains(&p));
-        Self { blades, p: 0.5 }
+        assert!(blades >= 3);
+        assert!(p > 0.0);
+        Self { blades, p }
     }
 }
 
 impl Aperture for SimpleBladedAperture {
     fn intersects(&self, aperture_radius: f32, ray: Ray) -> bool {
         match self.blades {
-            6 => {
-                let phi = std::f32::consts::PI / 3.0;
-                let top = Vec3::new(phi.cos(), phi.sin(), 0.0);
-                let bottom = Vec3::new(phi.cos(), -phi.sin(), 0.0);
-                let mut point = Vec3::from(ray.origin);
-                point.0[2] = 0.0;
-                let normalized = point.normalized();
-                let cos_top = normalized * top;
-                let cos_bottom = normalized * bottom;
-                let cos_apex = normalized.x();
-                let minimum = ((1.0 + cos_top.abs().powf(self.p)) / cos_top.abs())
-                    .min((1.0 + cos_bottom.abs().powf(self.p)) / cos_bottom.abs())
-                    .min((1.0 + cos_apex.abs().powf(self.p)) / cos_apex.abs());
-                point.x().hypot(point.y()) > minimum * aperture_radius
-                // 1.0 > minimum * aperture_radius
+            3..=10 => {
+                let mut p = ray.origin;
+                p.0[2] = 0.0;
+                let mut theta = p.y().atan2(p.x());
+                theta %= std::f32::consts::TAU / self.blades as f32;
+                let cos = theta.cos();
+
+                let v = self.p / (self.p + cos);
+                let dist = p.x().hypot(p.y());
+                dist < v
             }
             _ => CircularAperture::intersects(&CircularAperture::default(), aperture_radius, ray),
         }
