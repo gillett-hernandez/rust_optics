@@ -43,20 +43,17 @@ impl Aperture for SimpleBladedAperture {
         match self.blades {
             3..=10 => {
                 let mut theta = p.y().atan2(p.x());
-                theta %= extent;
+                theta = theta.rem_euclid(extent);
                 theta -= extent / 2.0;
-                #[cfg(test)]
-                println!("{}", theta);
                 let cos = theta.cos();
 
                 // let v = self.p / (self.p + cos);
                 // let 1/v = (1 + cos / self.p);
                 let v = (1.0 + cos * self.recip_p).recip();
                 let dist = p.x().hypot(p.y());
-                println!("{}, {}", dist, v);
-                dist < v
+                dist > v
             }
-            _ => CircularAperture::is_rejected(&CircularAperture::default(), aperture_radius, p),
+            _ => CircularAperture::default().is_rejected(aperture_radius, p),
         }
     }
 }
@@ -87,50 +84,50 @@ pub trait ApertureSample {
     /// samples the aperture given a random sample
     /// the sample is constrained to lie within the unit circle with a z value of zero,
     /// so scale it to the actual aperture size where appropriate
-    fn sample(&self, sample: Sample2D) -> Point3;
+    fn sample(&self, sample: Sample2D) -> Result<Point3, ()>;
 }
 
 impl ApertureSample for CircularAperture {
-    fn sample(&self, sample: Sample2D) -> Point3 {
-        random_in_unit_disk(sample).into()
+    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
+        Ok(random_in_unit_disk(sample).into())
     }
 }
 
 impl ApertureSample for SimpleBladedAperture {
-    fn sample(&self, mut sample: Sample2D) -> Point3 {
+    fn sample(&self, mut sample: Sample2D) -> Result<Point3, ()> {
         // rejection sampling
         // the subtractions and such might introduce bias
         // TODO: measure and address bias
         let p: Point3 = random_in_unit_disk(sample).into();
         if !self.is_rejected(1.0, p) {
-            return p;
+            return Ok(p);
         }
 
-        sample.x = 1.0 - sample.x;
-        let p: Point3 = random_in_unit_disk(sample).into();
-        if !self.is_rejected(1.0, p) {
-            return p;
-        }
+        // sample.x = (sample.x + 0.5) % 1.0;
+        // let p: Point3 = random_in_unit_disk(sample).into();
+        // if !self.is_rejected(1.0, p) {
+        //     return Ok(p);
+        // }
 
-        sample.y = 1.0 - sample.y;
-        let p: Point3 = random_in_unit_disk(sample).into();
-        if !self.is_rejected(1.0, p) {
-            return p;
-        }
+        // sample.y = (sample.y + 0.5) % 1.0;
+        // let p: Point3 = random_in_unit_disk(sample).into();
+        // if !self.is_rejected(1.0, p) {
+        //     return Ok(p);
+        // }
 
-        sample.x = 1.0 - sample.x;
-        sample.y = 1.0 - sample.y;
-        let p: Point3 = random_in_unit_disk(sample).into();
-        if !self.is_rejected(1.0, p) {
-            return p;
-        }
+        // sample.x = (sample.x + 0.5) % 1.0;
+        // sample.y = (sample.y + 0.5) % 1.0;
+        // let p: Point3 = random_in_unit_disk(sample).into();
+        // if !self.is_rejected(1.0, p) {
+        //     return Ok(p);
+        // }
         // give up
-        Point3::ORIGIN
+        Err(())
     }
 }
 
 impl ApertureSample for ApertureEnum {
-    fn sample(&self, sample: Sample2D) -> Point3 {
+    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
         match self {
             ApertureEnum::CircularAperture(inner) => inner.sample(sample),
             ApertureEnum::SimpleBladedAperture(inner) => inner.sample(sample),
@@ -145,7 +142,29 @@ mod test {
     fn test_bladed_aperture() {
         let bladed = SimpleBladedAperture::new(3, 0.5);
 
-        assert!(bladed.is_rejected(1.0, Point3::new(0.49, 0.0, 0.0)));
-        assert!(!bladed.is_rejected(1.0, Point3::new(0.51, 0.0, 0.0)));
+        assert!(!bladed.is_rejected(1.0, Point3::new(0.49, 0.0, 0.0)));
+        assert!(bladed.is_rejected(1.0, Point3::new(0.51, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn test_bladed_aperture_sample() {
+        let bladed = SimpleBladedAperture::new(3, 0.5);
+
+        let mut total_attempts = 0;
+
+        for _ in 0..10000 {
+            loop {
+                let s = Sample2D::new_random_sample();
+                let maybe_point = bladed.sample(s);
+
+                total_attempts += 1;
+                if let Ok(point) = maybe_point {
+                    print!("({}, {}),", point.x(), point.y());
+                    break;
+                }
+            }
+        }
+        println!();
+        println!("iterations per sample: {}", total_attempts as f32 / 10000.0);
     }
 }
