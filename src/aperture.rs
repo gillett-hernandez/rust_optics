@@ -20,16 +20,20 @@ pub struct SimpleBladedAperture {
     pub blades: u8,
     pub p: f32,
     recip_p: f32,
+    pub max_radius: f32,
 }
 
 impl SimpleBladedAperture {
     pub fn new(blades: u8, p: f32) -> Self {
         assert!(blades >= 3);
         assert!(p > 0.0);
+        let recip_p = p.recip();
+        let cos = (std::f32::consts::PI / blades as f32).cos();
         Self {
             blades,
             p,
-            recip_p: p.recip(),
+            recip_p,
+            max_radius: (1.0 + cos * recip_p).recip(),
         }
     }
 }
@@ -39,12 +43,12 @@ impl Aperture for SimpleBladedAperture {
         p.0[2] = 0.0;
         p.0 = p.0 / f32x4::splat(aperture_radius);
         p = p.normalize();
-        let extent = std::f32::consts::TAU / self.blades as f32;
+        let repeat_angle = std::f32::consts::TAU / self.blades as f32;
         match self.blades {
             3..=10 => {
                 let mut theta = p.y().atan2(p.x());
-                theta = theta.rem_euclid(extent);
-                theta -= extent / 2.0;
+                theta = theta.rem_euclid(repeat_angle);
+                theta -= repeat_angle / 2.0;
                 let cos = theta.cos();
 
                 // let v = self.p / (self.p + cos);
@@ -94,35 +98,9 @@ impl ApertureSample for CircularAperture {
 }
 
 impl ApertureSample for SimpleBladedAperture {
-    fn sample(&self, mut sample: Sample2D) -> Result<Point3, ()> {
-        // rejection sampling
-        // the subtractions and such might introduce bias
-        // TODO: measure and address bias
-        let p: Point3 = random_in_unit_disk(sample).into();
-        if !self.is_rejected(1.0, p) {
-            return Ok(p);
-        }
-
-        // sample.x = (sample.x + 0.5) % 1.0;
-        // let p: Point3 = random_in_unit_disk(sample).into();
-        // if !self.is_rejected(1.0, p) {
-        //     return Ok(p);
-        // }
-
-        // sample.y = (sample.y + 0.5) % 1.0;
-        // let p: Point3 = random_in_unit_disk(sample).into();
-        // if !self.is_rejected(1.0, p) {
-        //     return Ok(p);
-        // }
-
-        // sample.x = (sample.x + 0.5) % 1.0;
-        // sample.y = (sample.y + 0.5) % 1.0;
-        // let p: Point3 = random_in_unit_disk(sample).into();
-        // if !self.is_rejected(1.0, p) {
-        //     return Ok(p);
-        // }
-        // give up
-        Err(())
+    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
+        let p: Point3 = (random_in_unit_disk(sample) * self.max_radius).into(); // max radius is less than 1.0, multiplies down our sample space to improve efficiency.
+        (!self.is_rejected(1.0, p)).then_some(p).ok_or(())
     }
 }
 
