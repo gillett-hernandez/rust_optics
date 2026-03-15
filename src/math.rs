@@ -3,7 +3,7 @@ pub(crate) use std::simd::{
     cmp::{SimdPartialEq, SimdPartialOrd},
     f32x4,
     num::{SimdFloat, SimdInt},
-    simd_swizzle, StdFloat,
+    simd_swizzle, Select, StdFloat,
 };
 
 #[derive(Copy, Clone, Debug)]

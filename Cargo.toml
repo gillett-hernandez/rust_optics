@@ -14,7 +14,7 @@ math = { git = "https://github.com/gillett-hernandez/rust_cg_math" }
 minifb = "~0.27"
 nalgebra = "~0.32"
 num_cpus = "~1.16"
-ordered-float = "~4.2"
+ordered-float = "~4.6"
 paw = "~1.0"
 rand = "~0.8"
 rayon = "~1.10"
