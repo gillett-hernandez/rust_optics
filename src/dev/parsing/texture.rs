@@ -26,24 +26,24 @@ pub struct TextureStackData {
     pub texture_stack: Vec<TextureData>,
 }
 
-pub fn parse_rgba(filepath: &str) -> Vec2D<f32x4> {
+pub fn parse_rgba(filepath: &str) -> Vec2D<[f32; 4]> {
     println!("parsing rgba texture at {}", filepath);
     let path = Path::new(filepath);
     let img = image::open(path).unwrap();
     let rgba_image = img.into_rgba8();
     let (width, height) = rgba_image.dimensions();
-    let mut new_film = Vec2D::new(width as usize, height as usize, f32x4::splat(0.0));
+    let mut new_film = Vec2D::new(width as usize, height as usize, [0.0f32; 4]);
     for (x, y, pixel) in rgba_image.enumerate_pixels() {
-        let [r, g, b, a]: [u8; 4] = pixel.0.into();
+        let [r, g, b, a] = pixel.0;
         new_film.write_at(
             x as usize,
             y as usize,
-            f32x4::from_array([
+            [
                 r as f32 / 256.0,
                 g as f32 / 256.0,
                 b as f32 / 256.0,
                 a as f32 / 256.0,
-            ]),
+            ],
         );
     }
     new_film
@@ -63,7 +63,7 @@ pub fn parse_bitmap(filepath: &str) -> Vec2D<f32> {
     new_film
 }
 
-pub fn select_channel(film: &Vec2D<f32x4>, channel: usize) -> Vec2D<f32> {
+pub fn select_channel(film: &Vec2D<[f32; 4]>, channel: usize) -> Vec2D<f32> {
     assert!(channel < 4);
 
     Vec2D {
@@ -146,7 +146,7 @@ pub fn blit_circle(film: &mut Vec2D<u32>, radius: f32, x: usize, y: usize, c: u3
 #[derive(Clone)]
 pub struct Texture4 {
     pub curves: [CurveWithCDF; 4],
-    pub texture: Vec2D<f32x4>,
+    pub texture: Vec2D<[f32; 4]>,
     pub interpolation_mode: InterpolationMode,
 }
 
@@ -156,13 +156,9 @@ impl Texture4 {
     pub fn eval_at(&self, lambda: f32, uv: (f32, f32)) -> f32 {
         // TODO: bilinear or bicubic texture interpolation/filtering
         let factors = self.texture.at_uv(uv);
-        let eval = f32x4::from_array([
-            self.curves[0].evaluate_power(lambda),
-            self.curves[1].evaluate_power(lambda),
-            self.curves[2].evaluate_power(lambda),
-            self.curves[3].evaluate_power(lambda),
-        ]);
-        (factors * eval).reduce_sum()
+        (0..4)
+            .map(|i| factors[i] * self.curves[i].evaluate_power(lambda))
+            .sum()
     }
 }
 #[derive(Clone)]

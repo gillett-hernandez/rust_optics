@@ -1,10 +1,38 @@
-pub(crate) use math::prelude::*;
-pub(crate) use std::simd::{
-    cmp::{SimdPartialEq, SimdPartialOrd},
-    f32x4,
-    num::{SimdFloat, SimdInt},
-    simd_swizzle, Select, StdFloat,
-};
+pub use ::math::prelude::*;
+
+// NB: `Simd`, `LinAlg3Register` and `Vector` are all re-exported by the prelude
+// glob above. We deliberately do *not* `use` `Simd`/`LinAlg3Register` by name —
+// a private import would shadow the public glob re-export and trip the
+// `hidden_glob_reexports` lint — so the bound below is written fully-qualified.
+
+/// Marker for any thermite SIMD backend usable as the geometry backend in this
+/// crate: a [`Simd`](thermite::simd::Simd) whose 4-lane f32 register supports
+/// the 3D linear-algebra ops (`dot3`/`cross3`) that `Vec3`, `Point3`, `Ray`,
+/// `TangentFrame` and `XYZColor` rely on.
+///
+/// This crate stays fully generic over the backend: every geometric type is
+/// `Type<S>` and every function is generic over `S: SimdBackend`. A concrete
+/// backend (e.g. [`thermite::backend::x86_v3::X86V3`], the AVX2+FMA backend) is
+/// chosen only at the edges — tests, benches, examples and downstream binaries.
+/// Build those with `RUSTFLAGS="-C target-cpu=native"` so the AVX2 paths are
+/// actually emitted.
+///
+/// The blanket impl means you never implement this by hand; it applies to every
+/// qualifying backend automatically. As a supertrait the associated-type bound
+/// is elaborated, so `S: SimdBackend` implies `S::f32x4: LinAlg3Register` at
+/// every use site without restating the where-clause.
+pub trait SimdBackend:
+    thermite::simd::Simd<f32x4: thermite::register::LinAlg3Register>
+{
+}
+impl<S> SimdBackend for S where
+    S: thermite::simd::Simd<f32x4: thermite::register::LinAlg3Register>
+{
+}
+
+/// 4-lane f32 register vector for backend `S`. Replaces the old
+/// `std::simd::f32x4`; generic so callers pick the backend.
+pub type F32x4<S> = Vector<<S as thermite::simd::Simd>::f32x4>;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Input<T> {
@@ -32,11 +60,11 @@ impl<T> Output<T> {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PlaneRay(pub f32x4);
+pub struct PlaneRay(pub [f32; 4]);
 
 impl PlaneRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self(f32x4::from_array([x, y, dx, dy]))
+        Self([x, y, dx, dy])
     }
     pub fn x(&self) -> f32 {
         self.0[0]
@@ -53,11 +81,11 @@ impl PlaneRay {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct SphereRay(pub f32x4);
+pub struct SphereRay(pub [f32; 4]);
 
 impl SphereRay {
     pub fn new(x: f32, y: f32, dx: f32, dy: f32) -> Self {
-        Self(f32x4::from_array([x, y, dx, dy]))
+        Self([x, y, dx, dy])
     }
     pub fn x(&self) -> f32 {
         self.0[0]

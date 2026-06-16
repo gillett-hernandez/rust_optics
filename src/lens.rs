@@ -23,7 +23,7 @@ pub struct LensInterface {
     pub vno: f32, // abbe number
     pub housing_radius: f32,
     pub aspheric: i32,
-    pub correction: f32x4,
+    pub correction: [f32; 4],
 }
 
 impl LensInterface {
@@ -57,7 +57,7 @@ impl LensInterface {
         if string.starts_with('#') {
             return Err("line started with comment");
         }
-        println!("{}", string);
+        // println!("{}", string);
         let mut tokens = string.split_ascii_whitespace();
         let radius = tokens
             .next()
@@ -148,7 +148,7 @@ impl LensInterface {
             vno,
             housing_radius,
             aspheric: 0,
-            correction: f32x4::splat(0.0),
+            correction: [0.0; 4],
         })
     }
 }
@@ -205,17 +205,18 @@ impl LensAssembly {
     }
 
     // traces rays from the sensor to the outer pupil
-    pub fn trace_forward<F, G>(
+    pub fn trace_forward<S, F, G>(
         &self,
         zoom: f32,
-        input: Input<Ray>,
+        input: Input<Ray<S>>,
         atmosphere_ior: f32,
         aperture_hook: F,
         mut step_hook: G,
-    ) -> Option<Output<Ray>>
+    ) -> Option<Output<Ray<S>>>
     where
-        F: Fn(Ray) -> (bool, bool),
-        G: FnMut((Point3, Point3, f32)) -> (),
+        S: SimdBackend,
+        F: Fn(Ray<S>) -> (bool, bool),
+        G: FnMut((Point3<S>, Point3<S>, f32)) -> (),
     {
         assert!(!self.lenses.is_empty());
         let mut error = 0;
@@ -254,7 +255,7 @@ impl LensAssembly {
                     }
                 }
             }
-            let res: (Ray, Vec3);
+            let res: (Ray<S>, Vec3<S>);
             if lens.anamorphic {
                 res = trace_cylindrical(ray, r, position + r, lens.housing_radius).ok()?;
             } else if lens.aspheric > 0 {
@@ -281,7 +282,7 @@ impl LensAssembly {
             // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
             let res = refract(n1, n2, normal, ray.direction);
             ray.direction = res.0;
-            debug_assert!(ray.direction.0.is_finite().all(), "{:?}", ray.direction);
+            debug_assert!(ray.direction.is_finite(), "{:?}", ray.direction);
             intensity *= res.1;
             if intensity < INTENSITY_EPS {
                 error |= 8;
@@ -291,7 +292,7 @@ impl LensAssembly {
             }
             // not sure why this normalize is here.
             ray.direction = ray.direction.normalized();
-            debug_assert!(ray.direction.0.is_finite().all(), "{:?}", ray.direction);
+            debug_assert!(ray.direction.is_finite(), "{:?}", ray.direction);
             n1 = n2;
         }
         Some(Output {
@@ -301,17 +302,18 @@ impl LensAssembly {
     }
 
     // evaluate scene to sensor. input ray must be facing away from the camera?
-    pub fn trace_reverse<F, G>(
+    pub fn trace_reverse<S, F, G>(
         &self,
         zoom: f32,
-        input: Input<Ray>,
+        input: Input<Ray<S>>,
         atmosphere_ior: f32,
         aperture_hook: F,
         mut step_hook: G,
-    ) -> Option<Output<Ray>>
+    ) -> Option<Output<Ray<S>>>
     where
-        F: Fn(Ray) -> (bool, bool),
-        G: FnMut((Point3, Point3, f32)) -> (),
+        S: SimdBackend,
+        F: Fn(Ray<S>) -> (bool, bool),
+        G: FnMut((Point3<S>, Point3<S>, f32)) -> (),
     {
         assert!(!self.lenses.is_empty());
         let mut error = 0;
@@ -356,7 +358,7 @@ impl LensAssembly {
                     }
                 }
             }
-            let trace_result: (Ray, Vec3);
+            let trace_result: (Ray<S>, Vec3<S>);
             if lens.anamorphic {
                 trace_result = trace_cylindrical(ray, r, distsum - r, lens.housing_radius).ok()?;
             } else if lens.aspheric > 0 {
@@ -426,13 +428,13 @@ pub fn spectrum_eta_from_abbe_num(nd: f32, vd: f32, lambda: f32) -> f32 {
     a + b / (lambda * lambda)
 }
 
-pub fn trace_spherical(
-    ray: Ray,
+pub fn trace_spherical<S: SimdBackend>(
+    ray: Ray<S>,
     r: f32,
     center: f32,
     housing_radius: f32,
-) -> Result<(Ray, Vec3), i16> {
-    let scv = Vec3::from(ray.origin - Vec3::Z * center);
+) -> Result<(Ray<S>, Vec3<S>), i16> {
+    let scv = Vec3::from(ray.origin - Vec3::z_axis() * center);
     let a = ray.direction * ray.direction;
     let b = 2.0 * ray.direction * scv;
     let c = scv * scv - r * r;
@@ -462,7 +464,12 @@ pub fn trace_spherical(
     }
 }
 
-pub fn evaluate_aspherical(pos: Point3, r: f32, k: i32, correction: f32x4) -> f32 {
+pub fn evaluate_aspherical<S: SimdBackend>(
+    pos: Point3<S>,
+    r: f32,
+    k: i32,
+    correction: [f32; 4],
+) -> f32 {
     let h = (pos.x() * pos.x() + pos.y() * pos.y()).sqrt();
     let hr = h / r;
     let h2 = h * h;
@@ -470,12 +477,19 @@ pub fn evaluate_aspherical(pos: Point3, r: f32, k: i32, correction: f32x4) -> f3
     let h6 = h4 * h2;
     let h8 = h4 * h4;
     let h10 = h8 * h2;
-    let corv = f32x4::from_array([h4, h6, h8, h10]);
     h * hr / (1.0 + (1.0 - (1.0 + k as f32) * hr * hr).max(0.0).sqrt())
-        + (correction * corv).reduce_sum()
+        + correction[0] * h4
+        + correction[1] * h6
+        + correction[2] * h8
+        + correction[3] * h10
 }
 
-pub fn evaluate_aspherical_derivative(pos: Point3, r: f32, k: i32, correction: f32x4) -> f32 {
+pub fn evaluate_aspherical_derivative<S: SimdBackend>(
+    pos: Point3<S>,
+    r: f32,
+    k: i32,
+    correction: [f32; 4],
+) -> f32 {
     let h = (pos.x() * pos.x() + pos.y() * pos.y()).sqrt();
     let hr = h / r;
     let h2 = h * h;
@@ -486,22 +500,24 @@ pub fn evaluate_aspherical_derivative(pos: Point3, r: f32, k: i32, correction: f
     let h6 = h4 * h2;
     let h7 = h4 * h3;
     let h9 = h6 * h3;
-    let corv = f32x4::from_array([4.0 * h3, 6.0 * h5, 8.0 * h7, 10.0 * h9]);
     let hr2 = hr * hr;
     let subexpr = (1.0 - (1.0 + k as f32) * hr2).max(0.0).sqrt();
     2.0 * hr / (1.0 + subexpr)
         + hr2 * hr * (k as f32 + 1.0) / (subexpr * (subexpr + 1.0).powf(2.0))
-        + (correction * corv).reduce_sum()
+        + correction[0] * 4.0 * h3
+        + correction[1] * 6.0 * h5
+        + correction[2] * 8.0 * h7
+        + correction[3] * 10.0 * h9
 }
 
-pub fn trace_aspherical(
-    mut ray: Ray,
+pub fn trace_aspherical<S: SimdBackend>(
+    mut ray: Ray<S>,
     r: f32,
     center: f32,
     k: i32,
-    mut correction: f32x4,
+    mut correction: [f32; 4],
     housing_radius: f32,
-) -> Result<(Ray, Vec3), i32> {
+) -> Result<(Ray<S>, Vec3<S>), i32> {
     let mut t = 0.0;
     let result = trace_spherical(ray, r, center, housing_radius)?;
     ray = result.0;
@@ -509,7 +525,12 @@ pub fn trace_aspherical(
     let mut rad = r;
     if (center + r - ray.origin.z()).abs() > (center - r - ray.origin.z()).abs() {
         rad = -r;
-        correction = -correction;
+        correction = [
+            -correction[0],
+            -correction[1],
+            -correction[2],
+            -correction[3],
+        ];
     }
 
     let mut position_error;
@@ -526,8 +547,7 @@ pub fn trace_aspherical(
     }
     let dz = evaluate_aspherical_derivative(ray.origin, rad, k, correction)
         * if normal.z() < 0.0 { -1.0 } else { 1.0 };
-    let sqr = ray.origin.0 * ray.origin.0;
-    let new_r = (sqr[0] + sqr[1]).sqrt();
+    let new_r = (ray.origin.x() * ray.origin.x() + ray.origin.y() * ray.origin.y()).sqrt();
     let normal = Vec3::new(
         ray.origin.x() / new_r * dz,
         ray.origin.y() / new_r * dz,
@@ -538,12 +558,12 @@ pub fn trace_aspherical(
     Ok((ray.at_time(t), normal))
 }
 
-pub fn trace_cylindrical(
-    mut ray: Ray,
+pub fn trace_cylindrical<S: SimdBackend>(
+    mut ray: Ray<S>,
     r: f32,
     center: f32,
     housing_radius: f32,
-) -> Result<(Ray, Vec3), i32> {
+) -> Result<(Ray<S>, Vec3<S>), i32> {
     let scv = Vec3::new(ray.origin.x(), 0.0, ray.origin.z() - center);
     let a = ray.direction * ray.direction;
     let b = 2.0 * ray.direction * scv;
@@ -558,8 +578,9 @@ pub fn trace_cylindrical(
         (-b + discriminant.sqrt()) / (2.0 * a)
     };
     ray = ray.at_time(t);
-    let sqr = ray.origin.0 * ray.origin.0;
-    if sqr[0] + sqr[1] > housing_radius * housing_radius {
+    if ray.origin.x() * ray.origin.x() + ray.origin.y() * ray.origin.y()
+        > housing_radius * housing_radius
+    {
         return Err(8);
     }
     let normal = Vec3::new(ray.origin.x(), 0.0, ray.origin.z() - center) / r;
@@ -580,7 +601,7 @@ pub fn fresnel(n1: f32, n2: f32, cosr: f32, cost: f32) -> f32 {
     }
 }
 
-pub fn refract(n1: f32, n2: f32, normal: Vec3, dir: Vec3) -> (Vec3, f32) {
+pub fn refract<S: SimdBackend>(n1: f32, n2: f32, normal: Vec3<S>, dir: Vec3<S>) -> (Vec3<S>, f32) {
     if n1 == n2 {
         (dir, 1.0)
     } else {
@@ -600,24 +621,28 @@ pub fn refract(n1: f32, n2: f32, normal: Vec3, dir: Vec3) -> (Vec3, f32) {
     }
 }
 
-pub fn plane_to_camera_space(ray_in: PlaneRay, plane_pos: f32) -> Ray {
-    let [x, y, dx, dy]: [f32; 4] = ray_in.0.into();
+pub fn plane_to_camera_space<S: SimdBackend>(ray_in: PlaneRay, plane_pos: f32) -> Ray<S> {
+    let [x, y, dx, dy] = ray_in.0;
     Ray::new(
         Point3::new(x, y, plane_pos),
         Vec3::new(dx, dy, 1.0).normalized(),
     )
 }
 
-pub fn camera_space_to_plane(ray_in: Ray, plane_pos: f32) -> PlaneRay {
-    let [x, y, z, _]: [f32; 4] = ray_in.origin.0.into();
-    let [dx, dy, dz, _]: [f32; 4] = ray_in.direction.0.into();
+pub fn camera_space_to_plane<S: SimdBackend>(ray_in: Ray<S>, plane_pos: f32) -> PlaneRay {
+    let [x, y, z, _] = ray_in.origin.as_array();
+    let [dx, dy, dz, _] = ray_in.direction.as_array();
     let t = (plane_pos - z) / dz;
 
     PlaneRay::new(x + t * dx, y + t * dy, dx / dz.abs(), dy / dz.abs())
 }
 
-pub fn sphere_to_camera_space(ray_in: SphereRay, sphere_center: f32, sphere_radius: f32) -> Ray {
-    let [x, y, dx, dy]: [f32; 4] = ray_in.0.into();
+pub fn sphere_to_camera_space<S: SimdBackend>(
+    ray_in: SphereRay,
+    sphere_center: f32,
+    sphere_radius: f32,
+) -> Ray<S> {
+    let [x, y, dx, dy] = ray_in.0;
     let normal = Vec3::new(
         x / sphere_radius,
         y / sphere_radius,
@@ -637,20 +662,26 @@ pub fn sphere_to_camera_space(ray_in: SphereRay, sphere_center: f32, sphere_radi
     )
 }
 
-pub fn camera_space_to_sphere(ray_in: Ray, sphere_center: f32, sphere_radius: f32) -> SphereRay {
-    let [x, y, z, _]: [f32; 4] = ray_in.origin.0.into();
+pub fn camera_space_to_sphere<S: SimdBackend>(
+    ray_in: Ray<S>,
+    sphere_center: f32,
+    sphere_radius: f32,
+) -> SphereRay {
+    let [x, y, z, _] = ray_in.origin.as_array();
     let normal = Vec3::new(x, y, (z - sphere_center).abs()) / sphere_radius;
     let temp_direction = ray_in.direction.normalized();
     let ex = Vec3::new(normal.z(), 0.0, -normal.x());
     let frame = TangentFrame::from_tangent_and_normal(ex, normal);
-    SphereRay(simd_swizzle!(
-        ray_in.origin.0,
-        frame.to_local(&temp_direction).0,
-        [0, 1, 4, 5]
-    ))
+    let local = frame.to_local(&temp_direction);
+    // [origin.x, origin.y, local_dir.x, local_dir.y]
+    SphereRay([x, y, local.x(), local.y()])
 }
 
-pub fn sample_point_on_lens(radius: f32, housing_radius: f32, sample: Sample2D) -> Point3 {
+pub fn sample_point_on_lens<S: SimdBackend>(
+    radius: f32,
+    housing_radius: f32,
+    sample: Sample2D,
+) -> Point3<S> {
     // radius is the radius of the sphere of the lens surface, and housing radius is the absolute limit on the distance from 0,0 to x,y
     //
     //
@@ -688,6 +719,13 @@ mod test {
     use rand::random;
 
     use super::*;
+
+    // Monomorphize the generic geometry on a concrete backend for the tests.
+    type Backend = thermite::backend::x86_v3::X86V3;
+    type Vec3 = crate::math::Vec3<Backend>;
+    type Point3 = crate::math::Point3<Backend>;
+    type Ray = crate::math::Ray<Backend>;
+
     #[test]
     fn test_parse() {
         let test_string = "65.22 9.60  N-SSK8 1.5 50 24.0";
@@ -716,7 +754,10 @@ mod test {
         let lens_assembly = LensAssembly::new(&lenses);
         let output = lens_assembly.trace_forward(
             0.0,
-            Input::new(Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::Z), 0.5),
+            Input::new(
+                Ray::new(Point3::new(0.0, 0.0, -1000.0), Vec3::z_axis()),
+                0.5,
+            ),
             1.0,
             |_| (false, true),
             drop,
@@ -733,7 +774,7 @@ mod test {
     }
 
     fn basic_incoming_ray(z_position: f32) -> Ray {
-        Ray::new(Point3::new(0.1, 0.0, z_position), -Vec3::Z)
+        Ray::new(Point3::new(0.1, 0.0, z_position), -Vec3::z_axis())
     }
 
     fn random_incoming_ray(z_position: f32) -> Ray {
@@ -790,14 +831,14 @@ mod test {
     fn test_evaluate_aspherical() {
         let incoming_ray = basic_incoming_ray(10.0);
         println!("testing evaluate aspherical with given incoming_ray");
-        let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
+        let result = evaluate_aspherical(incoming_ray.origin, 0.9, 1, [0.0; 4]);
         println!("{}", result);
     }
     #[test]
     fn test_evaluate_aspherical_derivative() {
         let incoming_ray = basic_incoming_ray(10.0);
         println!("testing evaluate aspherical_derivative with given incoming_ray");
-        let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, f32x4::ZERO);
+        let result = evaluate_aspherical_derivative(incoming_ray.origin, 0.9, 1, [0.0; 4]);
         println!("{}", result);
     }
     #[test]
@@ -805,7 +846,7 @@ mod test {
         let incoming = basic_incoming_ray(10.0);
 
         println!("testing trace aspherical with given input");
-        let result = trace_aspherical(incoming, 0.9, 1.0, 1, f32x4::ZERO, 0.9);
+        let result = trace_aspherical(incoming, 0.9, 1.0, 1, [0.0; 4], 0.9);
         match result {
             Ok((ray, normal)) => {
                 println!("{:?}, {:?}", ray, normal);
@@ -831,29 +872,52 @@ mod test {
     }
     #[test]
     fn test_plane_space() {
-        let incoming = random_incoming_ray(1.0);
+        let plane_pos = 1.0;
+        let incoming = random_incoming_ray(plane_pos);
         println!("{:?}", incoming);
 
         println!("testing camera space to plane space and back with given ray");
-        let plane = camera_space_to_plane(incoming, 0.0);
+        let plane = camera_space_to_plane(incoming, plane_pos);
         println!("{:?}", plane);
 
-        let new_ray = plane_to_camera_space(plane, 0.0);
+        let new_ray = plane_to_camera_space(plane, plane_pos);
         println!("{:?}", new_ray);
 
-        assert!((incoming.origin - new_ray.origin).norm() < 0.00001);
-        // assert!((incoming.direction - new_ray.direction).norm() < 0.00001);
+        assert!(
+            (incoming.origin - new_ray.origin).norm() < 0.00001,
+            "{:?} {:?}",
+            incoming.origin,
+            new_ray.origin
+        );
+        // plane representation loses the z-sign of the direction, so compare with z-flipped
+        let flipped = Vec3::new(
+            incoming.direction.x(),
+            incoming.direction.y(),
+            -incoming.direction.z(),
+        );
+        let dir_err = (flipped - new_ray.direction)
+            .norm()
+            .min((incoming.direction - new_ray.direction).norm());
+        assert!(
+            dir_err < 0.00001,
+            "{:?} {:?}",
+            incoming.direction,
+            new_ray.direction
+        );
     }
     #[test]
     fn test_sphere_space() {
         let incoming = basic_sphere_input(10.0);
         println!("{:?}", incoming);
 
-        let new_ray = sphere_to_camera_space(incoming.ray, 0.0, 1.0);
+        let new_ray = sphere_to_camera_space::<Backend>(incoming.ray, 0.0, 1.0);
         println!("{:?}", new_ray);
         let sphere = camera_space_to_sphere(new_ray, 0.0, 1.0);
         println!("{:?}", sphere);
-        assert!(SimdFloat::abs(sphere.0 - incoming.ray.0).reduce_sum() < 0.000001);
+        let err: f32 = (0..4)
+            .map(|i| (sphere.0[i] - incoming.ray.0[i]).abs())
+            .sum();
+        assert!(err < 0.000001);
     }
 
     #[test]

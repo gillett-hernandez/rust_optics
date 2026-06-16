@@ -1,14 +1,6 @@
-#![feature(portable_simd)]
-
-use std::f32::consts::{PI, SQRT_2};
 use std::f32::EPSILON;
+use std::f32::consts::{PI, SQRT_2};
 use std::ops::RangeInclusive;
-use std::simd::{
-    cmp::{SimdPartialEq, SimdPartialOrd},
-    f32x4,
-    num::{SimdFloat, SimdInt},
-    simd_swizzle, StdFloat,
-};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -22,19 +14,32 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 // use rand::prelude::*;
 use eframe::egui;
 // use egui::prelude::*;
-use crate::dev::parsing::*;
-use crate::math::*;
-use crate::vec2d::Vec2D;
-use ::math::prelude::*;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
+use optics::dev::parsing::*;
 use optics::lens_sampler::RadialSampler;
+use optics::math::*;
+use optics::vec2d::Vec2D;
 use rayon::prelude::*;
 // use lens_sampler::RadialSampler;
-use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
+use optics::misc::{Cycle, DrawMode, ViewMode, draw_line, project};
 use optics::*;
 
 use structopt::StructOpt;
+use thermite::generic_array::GenericArray;
+use thermite::register::{ShuffleRegister, SwizzleIndices};
+
+// The library is generic over the SIMD backend; this binary monomorphizes on
+// the AVX2+FMA backend. These aliases shadow the generic re-exports from
+// `optics::math::*` (and `SceneMode` from `optics::misc`) so the body below can
+// use the bare type names.
+type Backend = thermite::backend::x86_v3::X86V3;
+type Vec3 = optics::math::Vec3<Backend>;
+type Point3 = optics::math::Point3<Backend>;
+type Ray = optics::math::Ray<Backend>;
+type F32x4 = optics::math::F32x4<Backend>;
+type XYZColor = optics::math::XYZColor<Backend>;
+type SceneMode = optics::misc::SceneMode<Backend>;
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab-case")]
@@ -242,24 +247,26 @@ impl SimulationState {
                         }
                         SceneMode::SpotLight { pos, size, span } => match tail {
                             "pos.x" => {
-                                pos.0[0] = v;
-                                println!("pos = {:?}", pos.0);
+                                *pos = Vec3::new(v, pos.y(), pos.z());
+                                println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
                             "pos.y" => {
-                                pos.0[1] = v;
-                                println!("pos = {:?}", pos.0);
+                                *pos = Vec3::new(pos.x(), v, pos.z());
+                                println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
                             "pos.z" => {
-                                pos.0[2] = v;
-                                println!("pos = {:?}", pos.0);
+                                *pos = Vec3::new(pos.x(), pos.y(), v);
+                                println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
                             "size" => {
                                 println!();
                                 if v < 0.0 {
-                                    println!("attempted to change size to some nonsensical value, ignoring.\nsize should be above 0");
+                                    println!(
+                                        "attempted to change size to some nonsensical value, ignoring.\nsize should be above 0"
+                                    );
                                     return;
                                 }
                                 *size = v;
@@ -268,7 +275,9 @@ impl SimulationState {
                             "span" => {
                                 println!();
                                 if v < 0.0 || v >= 1.0 {
-                                    println!("attempted to change span to some nonsensical value, ignoring.\nspan should be between 0 and 1, where near 1 cooresponds to a very focused spotlight.");
+                                    println!(
+                                        "attempted to change span to some nonsensical value, ignoring.\nspan should be between 0 and 1, where near 1 cooresponds to a very focused spotlight."
+                                    );
                                     return;
                                 }
                                 *span = v;
@@ -393,7 +402,7 @@ impl eframe::App for SimulationState {
                     }
                 }
                 SceneMode::SpotLight { pos, size, span } => {
-                    let [mut x, mut y, mut z, _]: [f32; 4] = pos.0.into();
+                    let [mut x, mut y, mut z, _] = pos.as_array();
 
                     let mut any_changed = false;
 
@@ -420,7 +429,7 @@ impl eframe::App for SimulationState {
                             .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(z)))
                             .unwrap();
                     }
-                    pos.0 = f32x4::from_array([x, y, z, 0.0]);
+                    *pos = Vec3::new(x, y, z);
 
                     ui.label("size");
                     let response = ui.add(
@@ -611,7 +620,7 @@ fn run_simulation(
     receiver: Receiver<(String, Command)>,
     sender: Sender<(String, Command)>,
 ) {
-    use dev::tonemap::{sRGB, Tonemapper};
+    use optics::dev::tonemap::{Tonemapper, sRGB};
 
     println!("{:?}", opt);
     let width = opt.width;
@@ -636,7 +645,7 @@ fn run_simulation(
         panic!("{}", e);
     });
 
-    let mut film = Vec2D::new(width, height, XYZColor::BLACK);
+    let mut film = Vec2D::new(width, height, XYZColor::black());
     let mut window_pixels = Vec2D::new(width, height, 0u32);
 
     // Limit to max ~144 fps update rate
@@ -647,12 +656,6 @@ fn run_simulation(
     let scene = get_scene("textures.toml").unwrap();
 
     window.set_target_fps(144);
-
-    let frame_dt = 6944.0 / 1000000.0;
-
-    let scene = get_scene("textures.toml").unwrap();
-
-    let wavelength_bounds = BOUNDED_VISIBLE_RANGE;
     let mut textures: Vec<TexStack> = Vec::new();
     for tex in scene.textures {
         textures.push(parse_texture_stack(tex.clone(), wavelength_bounds));
@@ -673,7 +676,7 @@ fn run_simulation(
     let direction_cache_radius_bins = 512;
     let direction_cache_wavelength_bins = 512;
 
-    let mut direction_cache = RadialSampler::new(
+    let mut direction_cache = RadialSampler::new::<Backend, _>(
         SQRT_2 * local_simulation_state.sensor_size / 2.0, // diagonal.
         direction_cache_radius_bins,
         direction_cache_wavelength_bins,
@@ -732,10 +735,10 @@ fn run_simulation(
         if clear_film {
             film.buffer
                 .par_iter_mut()
-                .for_each(|e| *e = XYZColor::BLACK)
+                .for_each(|e| *e = XYZColor::black())
         }
         if clear_direction_cache {
-            direction_cache = RadialSampler::new(
+            direction_cache = RadialSampler::new::<Backend, _>(
                 SQRT_2 * local_simulation_state.sensor_size / 2.0, // diagonal.
                 direction_cache_radius_bins,
                 direction_cache_wavelength_bins,
@@ -841,7 +844,7 @@ fn run_simulation(
                         for _ in 0..samples_per_iteration {
                             let v;
                             let s0 = sampler.draw_2d();
-                            let [mut x, mut y, z, _]: [f32; 4] = central_point.0.into();
+                            let [mut x, mut y, z, _] = central_point.as_array();
                             // jitter point within pixel
                             x += (s0.x - 0.5) / width as f32 * local_simulation_state.sensor_size;
                             y += (s0.y - 0.5) / height as f32 * local_simulation_state.sensor_size;
@@ -1134,7 +1137,21 @@ fn run_simulation(
             }
             ViewMode::XRay { bounds } => {
                 let mut sampler = RandomSampler::new();
-                let swizzle_project = |pt| project(pt, Vec3::X, |v| simd_swizzle!(v, [2, 1, 0, 3]));
+                // project onto the x=0 plane, then swap x<->z so depth maps to screen-x
+                let swizzle_project = |pt| {
+                    project(pt, Vec3::x_axis(), |v: F32x4| {
+                        F32x4::new([
+                            v.extract::<2>(),
+                            v.extract::<1>(),
+                            v.extract::<0>(),
+                            v.extract::<3>(),
+                        ])
+                        // v.swizzle_const(GenericArray::<u32, 4>::new(2, 1, 0, 3))
+                        // v.swizzle_const(GenericArray::<u32, 4>::new(2, 1, 0, 3))
+                    })
+                };
+
+                let mut segments = Vec::new();
                 for _ in 0..samples_per_iteration {
                     b += 1;
                     let (u, v) = {
@@ -1156,7 +1173,7 @@ fn run_simulation(
                     };
                     let ray = Ray::new(origin, direction);
 
-                    let mut segments = Vec::new();
+                    segments.clear();
 
                     let result = lens_assembly.trace_forward(
                         lens_zoom,
@@ -1224,7 +1241,7 @@ fn run_simulation(
                 let y: usize = pixel_idx / width;
                 let x: usize = pixel_idx - width * y;
                 let (mapped, _linear) = srgb_tonemapper.map(&film, (x, y));
-                let [r, g, b, _]: [f32; 4] = mapped.into();
+                let [r, g, b, _] = mapped;
                 *v = rgb_to_u32((255.0 * r) as u8, (255.0 * g) as u8, (255.0 * b) as u8);
             });
         window

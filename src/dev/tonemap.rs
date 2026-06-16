@@ -7,10 +7,25 @@ use crate::math::*;
 // use exr::prelude::rgba_image::*;
 use nalgebra::{Matrix3, Vector3};
 
+use std::sync::LazyLock;
 use std::time::Instant;
 
+/// Constant CIE XYZ -> linear sRGB matrix. Hoisted out of the per-pixel
+/// `map()` so it isn't reconstructed for every pixel of every frame.
+static XYZ_TO_RGB: LazyLock<Matrix3<f32>> = LazyLock::new(|| {
+    Matrix3::new(
+        3.24096994, -1.53738318, -0.49861076, -0.96924364, 1.8759675, 0.04155506, 0.05563008,
+        -0.20397696, 1.05697151,
+    )
+});
+
 pub trait Tonemapper {
-    fn map(&self, film: &Vec2D<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4);
+    /// Returns `(srgb, linear)` as `[r, g, b, 0.0]` arrays.
+    fn map<S: SimdBackend>(
+        &self,
+        film: &Vec2D<XYZColor<S>>,
+        pixel: (usize, usize),
+    ) -> ([f32; 4], [f32; 4]);
     // fn write_to_files(&self, film: &Film<XYZColor>, exr_filename: &str, png_filename: &str);
 }
 
@@ -22,7 +37,7 @@ pub struct sRGB {
 }
 
 impl sRGB {
-    pub fn new(film: &Vec2D<XYZColor>, exposure_adjustment: f32) -> Self {
+    pub fn new<S: SimdBackend>(film: &Vec2D<XYZColor<S>>, exposure_adjustment: f32) -> Self {
         let mut max_luminance = 0.0;
         let mut total_luminance = 0.0;
         for y in 0..film.height {
@@ -56,40 +71,49 @@ impl sRGB {
 }
 
 impl Tonemapper for sRGB {
-    fn map(&self, film: &Vec2D<XYZColor>, pixel: (usize, usize)) -> (f32x4, f32x4) {
+    fn map<S: SimdBackend>(
+        &self,
+        film: &Vec2D<XYZColor<S>>,
+        pixel: (usize, usize),
+    ) -> ([f32; 4], [f32; 4]) {
         let cie_xyz_color = film.at(pixel.0, pixel.1);
         let mut scaled_cie_xyz_color = cie_xyz_color * self.factor * self.exposure_adjustment;
-        if !scaled_cie_xyz_color.0.is_finite().all() {
-            scaled_cie_xyz_color = XYZColor::BLACK;
+        if !(scaled_cie_xyz_color.x().is_finite()
+            && scaled_cie_xyz_color.y().is_finite()
+            && scaled_cie_xyz_color.z().is_finite())
+        {
+            scaled_cie_xyz_color = XYZColor::black();
         }
 
-        let xyz_to_rgb: Matrix3<f32> = Matrix3::new(
-            3.24096994,
-            -1.53738318,
-            -0.49861076,
-            -0.96924364,
-            1.8759675,
-            0.04155506,
-            0.05563008,
-            -0.20397696,
-            1.05697151,
-        );
-        let [x, y, z, _]: [f32; 4] = scaled_cie_xyz_color.0.into();
-        let intermediate = xyz_to_rgb * Vector3::new(x, y, z);
+        let intermediate = *XYZ_TO_RGB
+            * Vector3::new(
+                scaled_cie_xyz_color.x(),
+                scaled_cie_xyz_color.y(),
+                scaled_cie_xyz_color.z(),
+            );
 
-        let rgb_linear =
-            f32x4::from_array([intermediate[0], intermediate[1], intermediate[2], 0.0]);
-        let S313: f32x4 = f32x4::splat(0.0031308);
-        let S323_25: f32x4 = f32x4::splat(323.0 / 25.0);
-        let S5_12: f32x4 = f32x4::splat(5.0 / 12.0);
-        let S211: f32x4 = f32x4::splat(211.0);
-        let S11: f32x4 = f32x4::splat(11.0);
-        let S200: f32x4 = f32x4::splat(200.0);
-        let srgb = (rgb_linear.simd_lt(S313)).select(
-            S323_25 * rgb_linear,
-            (S211 * rgb_linear.powf(S5_12) - S11) / S200,
-        );
-        (srgb, rgb_linear / f32x4::splat(self.factor))
+        let rgb_linear = [intermediate[0], intermediate[1], intermediate[2], 0.0];
+        // per-channel linear -> sRGB transfer
+        let to_srgb = |c: f32| {
+            if c < 0.0031308 {
+                (323.0 / 25.0) * c
+            } else {
+                (211.0 * c.powf(5.0 / 12.0) - 11.0) / 200.0
+            }
+        };
+        let srgb = [
+            to_srgb(rgb_linear[0]),
+            to_srgb(rgb_linear[1]),
+            to_srgb(rgb_linear[2]),
+            0.0,
+        ];
+        let linear = [
+            rgb_linear[0] / self.factor,
+            rgb_linear[1] / self.factor,
+            rgb_linear[2] / self.factor,
+            0.0,
+        ];
+        (srgb, linear)
     }
     // fn write_to_files(&self, film: &Film<XYZColor>, exr_filename: &str, png_filename: &str) {
     //     let now = Instant::now();

@@ -1,4 +1,7 @@
-Cargo.lock
+
 target/*
 *.txt
 .vscode/**
+*.md
+*.csv
+*.png

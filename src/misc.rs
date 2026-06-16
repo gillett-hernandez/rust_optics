@@ -1,5 +1,6 @@
-use crate::vec2d::Vec2D;
 pub use crate::math::*;
+#[cfg(feature = "dev")]
+use crate::vec2d::Vec2D;
 #[cfg(feature = "dev")]
 use line_drawing;
 
@@ -8,22 +9,22 @@ pub trait Cycle {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum SceneMode {
+pub enum SceneMode<S: SimdBackend> {
     // diffuse emitter texture
     TexturedWall { distance: f32, texture_scale: f32 },
     // small diffuse lights
     PinLight,
 
     // spot light shining with a specific angle
-    SpotLight { pos: Vec3, size: f32, span: f32 },
+    SpotLight { pos: Vec3<S>, size: f32, span: f32 },
 }
 
-impl Cycle for SceneMode {
+impl<S: SimdBackend> Cycle for SceneMode<S> {
     fn cycle(self) -> Self {
         match self {
             SceneMode::TexturedWall { .. } => SceneMode::PinLight,
             SceneMode::PinLight => SceneMode::SpotLight {
-                pos: Vec3::ZERO + 100.0 * Vec3::Z,
+                pos: Vec3::ZERO + 100.0 * Vec3::z_axis(),
                 size: 0.1,
                 span: 0.99,
             },
@@ -54,15 +55,16 @@ impl Cycle for ViewMode {
     }
 }
 
-pub fn project<F>(point: Point3, plane_normal: Vec3, swizzle: F) -> Point3
+#[inline(always)]
+pub fn project<S: SimdBackend, F>(point: Point3<S>, plane_normal: Vec3<S>, swizzle: F) -> Point3<S>
 where
-    F: Fn(f32x4) -> f32x4,
+    F: Fn(F32x4<S>) -> F32x4<S>,
 {
-    let as_vec = point - Point3::ORIGIN;
+    let as_vec = point - Point3::origin();
     let normal_component = plane_normal * (as_vec * plane_normal);
     let projected = as_vec - normal_component;
 
-    Point3::ORIGIN + Vec3(swizzle(projected.0))
+    Point3::origin() + Vec3(swizzle(projected.0))
 }
 
 #[derive(Copy, Clone)]
@@ -73,11 +75,11 @@ pub enum DrawMode {
 }
 
 #[cfg(feature = "dev")]
-pub fn draw_line(
-    film: &mut Vec2D<XYZColor>,
+pub fn draw_line<S: SimdBackend>(
+    film: &mut Vec2D<XYZColor<S>>,
     clip_window: Bounds2D,
-    pt0: Point3,
-    pt1: Point3,
+    pt0: Point3<S>,
+    pt1: Point3<S>,
     lambda: f32,
     tau: f32,
     draw_mode: DrawMode,

@@ -7,7 +7,7 @@ use crate::*;
 
 #[derive(Debug, Clone)]
 pub struct RadialSampler {
-    pub cache: Vec2D<f32x4>,
+    pub cache: Vec2D<[f32; 2]>,
     pub sensor_size: f32,
     pub wavelength_bounds: Bounds1D,
     pub wavelength_bins: usize,
@@ -15,8 +15,9 @@ pub struct RadialSampler {
 }
 
 impl RadialSampler {
-    // the following function only works and applies to lens with radial symmetry
-    pub fn new<A>(
+    // the following function only works and applies to lens with radial symmetry.
+    // this is most lenses, but there are a few that are anamorphic
+    pub fn new<S, A>(
         radius_cap: f32,
         radius_bins: usize,
         wavelength_bins: usize,
@@ -29,10 +30,11 @@ impl RadialSampler {
         sensor_size: f32,
     ) -> Self
     where
+        S: SimdBackend,
         A: Send + Sync + Aperture,
     {
-        // create film of f32x4s
-        let mut film = Vec2D::new(radius_bins, wavelength_bins, f32x4::splat(0.0));
+        // create film of [f32; 4]s
+        let mut film = Vec2D::new(radius_bins, wavelength_bins, [0.0f32; 2]);
         let aperture_radius = lens_assembly.aperture_radius();
         film.buffer.par_iter_mut().enumerate().for_each(|(i, v)| {
             let radius_bin = i % radius_bins;
@@ -43,16 +45,16 @@ impl RadialSampler {
             let radius = radius_cap * radius_bin as f32 / radius_bins as f32;
             // find direction (with fixed y = 0) for sampling aperture and outer pupil, and find corresponding sampling "radius"
 
-            // switch flag to change from random to stratified.
-            let ray_origin = Point3::new(radius, 0.0, film_position);
-            let mut direction = Vec3::Z;
-            // let mut state = 0;
-            for _ in 0..1000 {
+            let ray_origin: Point3<S> = Point3::new(radius, 0.0, film_position);
+            let mut direction: Vec3<S> = Vec3::z_axis();
+            let mut found_valid = false;
+            const MAX_DIRECTION_SEARCH_ATTEMPTS: usize = 1000;
+            const GRAZING_ANGLE_MARGIN: f32 = 0.97;
+            let mut sampler = StratifiedSampler::new(1000, 1, 1);
+            for _ in 0..MAX_DIRECTION_SEARCH_ATTEMPTS {
                 // directions range from straight forward (0 degrees) to almost critical (90 degrees, tangent)
-
-                // random sampling along axis until direction is found.
-                let s = Sample1D::new_random_sample();
-                let angle = s.x * std::f32::consts::FRAC_PI_2 * 0.97;
+                let s = sampler.draw_1d();
+                let angle = s.x * std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
                 direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
 
                 let ray = Ray::new(ray_origin, direction);
@@ -64,25 +66,28 @@ impl RadialSampler {
                     drop,
                 );
                 if let Some(Output { .. }) = result {
-                    // found good direction, so break
+                    found_valid = true;
                     break;
                 }
+            }
+            if !found_valid {
+                // no valid direction found for this bin, store zero-extent sentinel
+                *v = [0.0; 2];
+                return;
             }
             // expand around direction to find radius and correct centroid.
             // measured in radians.
             let mut min_angle: f32 = 0.0;
             let mut max_angle: f32 = 0.0;
-            let mut radius = 0.0;
-            let mut sum_angle = 0.0;
-            let mut valid_angle_count = 0;
+            let mut search_offset = 0.0;
+            let base_angle = (-direction.x() / direction.z()).atan();
 
-            // maybe rewrite this as tree search?
-            'outer: loop {
-                radius += solver_heat;
+            const MAX_EXPANSION_ITERS: usize = 1000;
+            'outer: for _ in 0..MAX_EXPANSION_ITERS {
+                search_offset += solver_heat;
                 let mut ct = 0;
                 for mult in [-1.0, 1.0] {
-                    let old_angle = (-direction.x() / direction.z()).atan();
-                    let new_angle = old_angle + radius * mult;
+                    let new_angle = base_angle + search_offset * mult;
                     let new_direction = Vec3::new(-new_angle.sin(), 0.0, new_angle.cos());
                     let ray = Ray::new(ray_origin, new_direction);
                     let result = lens_assembly.trace_forward(
@@ -96,8 +101,6 @@ impl RadialSampler {
                         // found good direction. keep expanding.
                         max_angle = max_angle.max(new_angle);
                         min_angle = min_angle.min(new_angle);
-                        sum_angle += new_angle;
-                        valid_angle_count += 1;
                     } else {
                         // found bad direction with this mult. keep expanding until both sides are bad.
                         ct += 1;
@@ -108,13 +111,13 @@ impl RadialSampler {
                     }
                 }
             }
-            let avg_angle = if valid_angle_count > 0 {
-                sum_angle / (valid_angle_count as f32)
+            let avg_angle = if min_angle != 0.0 || max_angle != 0.0 {
+                (min_angle + max_angle) / 2.0
             } else {
                 0.0
             };
 
-            *v = f32x4::from_array([avg_angle, (max_angle - min_angle).abs() / 2.0, 0.0, 0.0]);
+            *v = [avg_angle, (max_angle - min_angle).abs() / 2.0];
         });
         RadialSampler {
             cache: film,
@@ -126,8 +129,14 @@ impl RadialSampler {
         }
     }
 
-    pub fn sample(&self, lambda: f32, point: Point3, s0: Sample2D, s1: Sample1D) -> Vec3 {
-        let [x, y, _, _]: [f32; 4] = point.0.into();
+    pub fn sample<S: SimdBackend>(
+        &self,
+        lambda: f32,
+        point: Point3<S>,
+        s2d: Sample2D,
+        s1: Sample1D,
+    ) -> Vec3<S> {
+        let [x, y, _, _] = point.as_array();
 
         let rotation_angle = y.atan2(x);
 
@@ -155,64 +164,42 @@ impl RadialSampler {
         } else {
             angles00
         };
-        // do bilinear interpolation?
-        let (du, dv) = (
-            u - d_x_idx as f32 / self.radius_bins as f32,
-            v - d_y_idx as f32 / self.wavelength_bins as f32,
+        let du = u * self.radius_bins as f32 - d_x_idx as f32;
+        let dv = v * self.wavelength_bins as f32 - d_y_idx as f32;
+
+        // bilinear interpolation; only lanes 0 (phi) and 1 (dphi) are meaningful
+        let (w00, w10, w01, w11) = (
+            (1.0 - du) * (1.0 - dv),
+            du * (1.0 - dv),
+            (1.0 - du) * dv,
+            du * dv,
         );
-
-        // let (phi, dphi) = (angles00[0], angles00[1]);
-
-        // direct lookup through uv
-        // let [phi, dphi, _, _]: [f32; 4] = direction_cache_film.at_uv((u, v)).into();
-
-        debug_assert!(du.is_finite(), "{}", du);
-        debug_assert!(dv.is_finite(), "{}", dv);
-        debug_assert!(angles00[0].is_finite(), "{:?}", angles00);
-        debug_assert!(angles01[0].is_finite(), "{:?}", angles01);
-        debug_assert!(angles10[0].is_finite(), "{:?}", angles10);
-        debug_assert!(angles11[0].is_finite(), "{:?}", angles11);
-        debug_assert!(angles00[1].is_finite(), "{:?}", angles00);
-        debug_assert!(angles01[1].is_finite(), "{:?}", angles01);
-        debug_assert!(angles10[1].is_finite(), "{:?}", angles10);
-        debug_assert!(angles11[1].is_finite(), "{:?}", angles11);
-        // bilinear interpolation
-        let (phi, dphi) = (
-            (1.0 - du) * (1.0 - dv) * angles00[0]
-                + du * (1.0 - dv) * angles01[0]
-                + dv * (1.0 - du) * angles10[0]
-                + du * dv * angles11[0],
-            (1.0 - du) * (1.0 - dv) * angles00[1]
-                + du * (1.0 - dv) * angles01[1]
-                + dv * (1.0 - du) * angles10[1]
-                + du * dv * angles11[1],
-        );
+        let phi = w00 * angles00[0] + w10 * angles10[0] + w01 * angles01[0] + w11 * angles11[0];
+        let dphi = w00 * angles00[1] + w10 * angles10[1] + w01 * angles01[1] + w11 * angles11[1];
 
         // direction is pointing towards the center somewhat and assumes direction.y() == 0.0
         // thus rotate to match actual central point of ray.
 
         let dx = -phi.sin();
-        let direction = Vec3(f32x4::from_array([
+        let direction = Vec3::new(
             dx * rotation_angle.cos(),
             dx * rotation_angle.sin(),
             phi.cos(),
-            0.0,
-        ]));
+        );
         debug_assert!(phi.is_finite(), "{}", phi);
         debug_assert!(rotation_angle.is_finite());
         debug_assert!(dx.is_finite(), "{}", dx);
-        debug_assert!(direction.0.is_finite().all());
-        let radius = dphi * 1.01;
-
-        // choose direction somehow
-
-        let s2d = s0;
-        let frame = TangentFrame::from_normal(Vec3(direction.0 * Vec3::MASK));
+        debug_assert!(direction.is_finite());
+        // slightly inflate cone to avoid missing edge rays due to FP rounding
+        const CONE_INFLATION: f32 = 1.01;
+        let radius = dphi * CONE_INFLATION;
+        // direction should be a valid unit vector by construction
+        let frame = TangentFrame::from_normal(direction);
         let phi = s1.x * TAU;
         let r = s2d.x.sqrt() * radius;
         debug_assert!(!r.is_nan());
-        let unnormalized_v = Vec3::Z + Vec3::new(r * phi.cos(), r * phi.sin(), 0.0);
-        debug_assert!(unnormalized_v.0.is_finite().all());
+        let unnormalized_v = Vec3::z_axis() + Vec3::new(r * phi.cos(), r * phi.sin(), 0.0);
+        debug_assert!(unnormalized_v.is_finite());
         // transforming a normalized vector should yield another normalized vector, as long as all the frame components are orthonormal.
         frame.to_world(&unnormalized_v.normalized())
     }
@@ -225,6 +212,12 @@ mod test {
     use ::math::spectral::BOUNDED_VISIBLE_RANGE;
 
     use super::*;
+
+    type Backend = thermite::backend::x86_v3::X86V3;
+    type Vec3 = crate::math::Vec3<Backend>;
+    type Point3 = crate::math::Point3<Backend>;
+    type Ray = crate::math::Ray<Backend>;
+
     #[test]
     fn test_radial_sampler() {
         let mut camera_file = File::open(&"data/cameras/petzval_kodak.txt").unwrap();
@@ -247,7 +240,7 @@ mod test {
         );
 
         let film_position = assembly.total_thickness_at(0.0);
-        let sampler = RadialSampler::new(
+        let radial_sampler = RadialSampler::new::<Backend, _>(
             35.0,
             100,
             100,
@@ -259,5 +252,30 @@ mod test {
             0.1,
             35.0,
         );
+
+        // verify that sample returns finite, normalized directions
+        for _ in 0..100 {
+            let s2d = Sample2D::new_random_sample();
+            let s1d = Sample1D::new_random_sample();
+            let lambda = BOUNDED_VISIBLE_RANGE.sample(s1d.x);
+            let point = Point3::new(s2d.x * 10.0 - 5.0, s2d.y * 10.0 - 5.0, -film_position);
+            let dir = radial_sampler.sample(
+                lambda,
+                point,
+                Sample2D::new_random_sample(),
+                Sample1D::new_random_sample(),
+            );
+            assert!(
+                dir.0.is_finite().all(),
+                "sample returned non-finite direction: {:?}",
+                dir
+            );
+            let len = dir.norm();
+            assert!(
+                (len - 1.0).abs() < 1e-4,
+                "sample returned non-unit direction with length {}",
+                len
+            );
+        }
     }
 }

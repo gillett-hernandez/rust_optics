@@ -1,12 +1,4 @@
-#![feature(portable_simd)]
-
 use std::ops::RangeInclusive;
-use std::simd::{
-    cmp::{SimdPartialEq, SimdPartialOrd},
-    f32x4,
-    num::{SimdFloat, SimdInt},
-    simd_swizzle, StdFloat,
-};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
@@ -23,14 +15,26 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 use rayon::prelude::*;
 
-use crate::dev::parsing::*;
-use crate::vec2d::Vec2D;
-use ::math::prelude::*;
+use optics::dev::parsing::*;
+use optics::math::*;
+use optics::vec2d::Vec2D;
 // use lens_sampler::RadialSampler;
-use optics::misc::{draw_line, project, Cycle, DrawMode, SceneMode, ViewMode};
+use optics::misc::{draw_line, project, Cycle, DrawMode, ViewMode};
 use optics::*;
 
 use structopt::StructOpt;
+
+// The library is generic over the SIMD backend; this binary monomorphizes on
+// the AVX2+FMA backend. These aliases shadow the generic re-exports from
+// `optics::math::*` (and `SceneMode` from `optics::misc`) so the body below can
+// use the bare type names.
+type Backend = thermite::backend::x86_v3::X86V3;
+type Vec3 = optics::math::Vec3<Backend>;
+type Point3 = optics::math::Point3<Backend>;
+type Ray = optics::math::Ray<Backend>;
+type F32x4 = optics::math::F32x4<Backend>;
+type XYZColor = optics::math::XYZColor<Backend>;
+type SceneMode = optics::misc::SceneMode<Backend>;
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab-case")]
@@ -152,17 +156,15 @@ impl SimulationState {
                     match &mut self.view_mode {
                         ViewMode::SpotOnFilm(x, y) => match tail {
                             "x" => {
-                                println!("updating view mode position on data end, new x = {}", v);
                                 *x = v;
                                 self.dirty = true;
                             }
                             "y" => {
-                                println!("updating view mode position on data end, new y = {}", v);
                                 *y = v;
                                 self.dirty = true;
                             }
                             _ => {
-                                println!("but failed to match to subtarget");
+                                panic!();
                             }
                         },
 
@@ -227,13 +229,13 @@ impl SimulationState {
                         }
                         SceneMode::SpotLight { pos, size, span } => match tail {
                             "pos.x" => {
-                                pos.0[0] = v;
+                                *pos = Vec3::new(v, pos.y(), pos.z());
                             }
                             "pos.y" => {
-                                pos.0[1] = v;
+                                *pos = Vec3::new(pos.x(), v, pos.z());
                             }
                             "pos.z" => {
-                                pos.0[2] = v;
+                                *pos = Vec3::new(pos.x(), pos.y(), v);
                             }
                             "size" => {
                                 if v < 0.0 {
@@ -359,7 +361,7 @@ impl eframe::App for SimulationState {
                     }
                 }
                 SceneMode::SpotLight { pos, size, span } => {
-                    let [mut x, mut y, mut z, _]: [f32; 4] = pos.0.into();
+                    let [mut x, mut y, mut z, _] = pos.as_array();
 
                     let mut any_changed = false;
 
@@ -386,7 +388,7 @@ impl eframe::App for SimulationState {
                             .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(z)))
                             .unwrap();
                     }
-                    pos.0 = f32x4::from_array([x, y, z, 0.0]);
+                    *pos = Vec3::new(x, y, z);
 
                     ui.label("size");
                     let response = ui.add(
@@ -547,7 +549,7 @@ fn run_simulation(
     receiver: Receiver<(String, Command)>,
     sender: Sender<(String, Command)>,
 ) {
-    use dev::tonemap::{sRGB, Tonemapper};
+    use optics::dev::tonemap::{sRGB, Tonemapper};
 
     println!("{:?}", opt);
     let window_width = opt.width;
@@ -570,7 +572,7 @@ fn run_simulation(
         panic!("{}", e);
     });
 
-    let mut film = Vec2D::new(window_width, window_height, XYZColor::BLACK);
+    let mut film = Vec2D::new(window_width, window_height, XYZColor::black());
     let mut window_pixels = Vec2D::new(window_width, window_height, 0u32);
 
     // Limit to max ~144 fps update rate
@@ -644,7 +646,7 @@ fn run_simulation(
         if clear_film {
             film.buffer
                 .par_iter_mut()
-                .for_each(|e| *e = XYZColor::BLACK)
+                .for_each(|e| *e = XYZColor::black())
         }
 
         let srgb_tonemapper = sRGB::new(&film, 1.0);
@@ -847,8 +849,12 @@ fn run_simulation(
                     }
                 }
                 ViewMode::XRay { bounds } => {
-                    let swizzle_project =
-                        |pt| project(pt, Vec3::X, |v| simd_swizzle!(v, [2, 1, 0, 3]));
+                    // project onto the x=0 plane, then swap x<->z so depth maps to screen-x
+                    let swizzle_project = |pt| {
+                        project(pt, Vec3::x_axis(), |v: F32x4| {
+                            F32x4::new([v.extract::<2>(), v.extract::<1>(), v.extract::<0>(), v.extract::<3>()])
+                        })
+                    };
                     let invert = |pt: Point3| Point3(-pt.0);
 
                     let mut segments = Vec::new();
@@ -931,7 +937,7 @@ fn run_simulation(
                 let y: usize = pixel_idx / width;
                 let x: usize = pixel_idx - width * y;
                 let (mapped, _linear) = srgb_tonemapper.map(&film, (x, y));
-                let [r, g, b, _]: [f32; 4] = mapped.into();
+                let [r, g, b, _] = mapped;
                 *v = rgb_to_u32((255.0 * r) as u8, (255.0 * g) as u8, (255.0 * b) as u8);
             });
         window

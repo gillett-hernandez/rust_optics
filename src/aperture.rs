@@ -1,17 +1,15 @@
-use std::simd::f32x4;
-
-use math::prelude::*;
+use crate::math::*;
 
 pub trait Aperture {
     /// returns whether the specific point would be / is rejected by the aperture
-    fn is_rejected(&self, aperture_radius: f32, p: Point3) -> bool;
+    fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool;
 }
 
 #[derive(Default, Copy, Clone, Debug)]
 pub struct CircularAperture {}
 
 impl Aperture for CircularAperture {
-    fn is_rejected(&self, aperture_radius: f32, p: Point3) -> bool {
+    fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool {
         p.x().hypot(p.y()) > aperture_radius
     }
 }
@@ -39,10 +37,11 @@ impl SimpleBladedAperture {
 }
 
 impl Aperture for SimpleBladedAperture {
-    fn is_rejected(&self, aperture_radius: f32, mut p: Point3) -> bool {
-        p.0[2] = 0.0;
-        p.0 = p.0 / f32x4::splat(aperture_radius);
-        p = p.normalize();
+    fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool {
+        // NB: the old code zeroed z, divided by aperture_radius, then divided by
+        // the homogeneous w — operations that cancel out and leave x/y unchanged,
+        // so we just read them directly. Both the angle and the distance below
+        // are computed purely from x and y.
         let repeat_angle = std::f32::consts::TAU / self.blades as f32;
         match self.blades {
             3..=10 => {
@@ -71,7 +70,7 @@ macro_rules! generate_enum {
         }
 
         impl Aperture for ApertureEnum {
-            fn is_rejected(&self, aperture_radius: f32, p: Point3) -> bool {
+            fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool {
                 match self {
                     $(
                         ApertureEnum::$e(inner) => inner.is_rejected(aperture_radius, p),
@@ -88,24 +87,24 @@ pub trait ApertureSample {
     /// samples the aperture given a random sample
     /// the sample is constrained to lie within the unit circle with a z value of zero,
     /// so scale it to the actual aperture size where appropriate
-    fn sample(&self, sample: Sample2D) -> Result<Point3, ()>;
+    fn sample<S: SimdBackend>(&self, sample: Sample2D) -> Result<Point3<S>, ()>;
 }
 
 impl ApertureSample for CircularAperture {
-    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
-        Ok(random_in_unit_disk(sample).into())
+    fn sample<S: SimdBackend>(&self, sample: Sample2D) -> Result<Point3<S>, ()> {
+        Ok(random_in_unit_disk::<S>(sample).into())
     }
 }
 
 impl ApertureSample for SimpleBladedAperture {
-    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
-        let p: Point3 = (random_in_unit_disk(sample) * self.max_radius).into(); // max radius is less than 1.0, multiplies down our sample space to improve efficiency.
+    fn sample<S: SimdBackend>(&self, sample: Sample2D) -> Result<Point3<S>, ()> {
+        let p: Point3<S> = (random_in_unit_disk::<S>(sample) * self.max_radius).into(); // max radius is less than 1.0, multiplies down our sample space to improve efficiency.
         (!self.is_rejected(1.0, p)).then_some(p).ok_or(())
     }
 }
 
 impl ApertureSample for ApertureEnum {
-    fn sample(&self, sample: Sample2D) -> Result<Point3, ()> {
+    fn sample<S: SimdBackend>(&self, sample: Sample2D) -> Result<Point3<S>, ()> {
         match self {
             ApertureEnum::CircularAperture(inner) => inner.sample(sample),
             ApertureEnum::SimpleBladedAperture(inner) => inner.sample(sample),
@@ -116,6 +115,10 @@ impl ApertureSample for ApertureEnum {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    type Backend = thermite::backend::x86_v3::X86V3;
+    type Point3 = crate::math::Point3<Backend>;
+
     #[test]
     fn test_bladed_aperture() {
         let bladed = SimpleBladedAperture::new(3, 0.5);
@@ -133,7 +136,7 @@ mod test {
         for _ in 0..10000 {
             loop {
                 let s = Sample2D::new_random_sample();
-                let maybe_point = bladed.sample(s);
+                let maybe_point = bladed.sample::<Backend>(s);
 
                 total_attempts += 1;
                 if let Ok(point) = maybe_point {

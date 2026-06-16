@@ -1,7 +1,6 @@
-#![feature(portable_simd)]
 extern crate minifb;
 
-use ::math::prelude::*;
+use crate::math::*;
 use rayon::prelude::*;
 
 pub mod aperture;
@@ -20,7 +19,6 @@ pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 pub use lens::{sample_point_on_lens, LensAssembly, LensInterface, LensType};
 
 pub extern crate nalgebra as na;
-pub(crate) use na::{Matrix3, Vector3};
 
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
@@ -30,8 +28,11 @@ use std::f32::{
     EPSILON,
 };
 
-fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Option<Output<Ray>>> {
-    let mut outputs: Vec<Option<Output<Ray>>> = Vec::new();
+fn simulate_phase1<S: SimdBackend>(
+    assembly: LensAssembly,
+    inputs: &Vec<Input<Ray<S>>>,
+) -> Vec<Option<Output<Ray<S>>>> {
+    let mut outputs: Vec<Option<Output<Ray<S>>>> = Vec::new();
     let aperture_radius = 10.0;
     let mut failed = 0;
     let aperture = SimpleBladedAperture::new(6, 0.5);
@@ -56,8 +57,11 @@ fn simulate_phase1(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Opti
     outputs
 }
 
-fn simulate_phase2(assembly: LensAssembly, inputs: &Vec<Input<Ray>>) -> Vec<Option<Output<Ray>>> {
-    let mut outputs: Vec<Option<Output<Ray>>> = Vec::new();
+fn simulate_phase2<S: SimdBackend>(
+    assembly: LensAssembly,
+    inputs: &Vec<Input<Ray<S>>>,
+) -> Vec<Option<Output<Ray<S>>>> {
+    let mut outputs: Vec<Option<Output<Ray<S>>>> = Vec::new();
     let aperture_radius = 10.0;
     let aperture = SimpleBladedAperture::new(6, 0.5);
 
