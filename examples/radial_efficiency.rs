@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .aperture_radius
         .unwrap_or_else(|| assembly.aperture_radius());
     let film_position = assembly.total_thickness_at(0.0) + opt.film_position_offset;
-    let radius_cap = SQRT_2 * opt.sensor_size / 2.0;
+    let radius_cap = SQRT_2 * opt.sensor_size;
 
     println!(
         "lens: {} | aperture radius: {:.3} | film position: {:.3} | radius cap: {:.3}",
