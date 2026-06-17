@@ -43,11 +43,7 @@ name = "optics"
 path = "src/lib.rs"
 
 [[example]]
-name = "forward_tracing"
-required-features = ["dev"]
-
-[[example]]
-name = "reverse_tracing"
+name = "lens_analysis"
 required-features = ["dev"]
 
 [[example]]

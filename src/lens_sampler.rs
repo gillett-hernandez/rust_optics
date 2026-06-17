@@ -142,7 +142,7 @@ impl RadialSampler {
 
         let film_radius = y.hypot(x);
 
-        let u = film_radius / (SQRT_2 * self.sensor_size / 2.0);
+        let u = film_radius / (SQRT_2 * self.sensor_size);
         let v = ((lambda - self.wavelength_bounds.lower) / self.wavelength_bounds.span())
             .clamp(0.0, 1.0 - EPSILON);
         debug_assert!(u < 1.0 && v < 1.0, "{}, {}", u, v);

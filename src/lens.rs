@@ -301,7 +301,14 @@ impl LensAssembly {
         })
     }
 
-    // evaluate scene to sensor. input ray must be facing away from the camera?
+    // Evaluate scene to sensor: trace a world-space ray (travelling toward the lens,
+    // i.e. in -z) back to the sensor. This is implemented as the exact inverse of
+    // `trace_forward`, in the *same* world coordinate frame (front vertex at z = 0,
+    // film at z = -total_thickness): we reconstruct each interface's sphere geometry
+    // and the (n1 -> n2) media pair exactly as `trace_forward` would, then traverse
+    // the interfaces front -> rear, running each refraction with the media swapped.
+    // Snell's law is reversible through the same surface normal, so a ray sent back
+    // along the reverse of a forward exit ray retraces the forward path.
     pub fn trace_reverse<S, F, G>(
         &self,
         zoom: f32,
@@ -316,32 +323,54 @@ impl LensAssembly {
         G: FnMut((Point3<S>, Point3<S>, f32)) -> (),
     {
         assert!(!self.lenses.is_empty());
-        let mut error = 0;
-        let mut n1 = atmosphere_ior;
+
+        // Per-interface geometry + media, captured in `trace_forward`'s processing
+        // order (rear -> front). `n1`/`n2` are forward's incident/transmitted media
+        // (film side / world side); reverse tracing swaps them.
+        struct Surf<'a> {
+            lens: &'a LensInterface,
+            r: f32,
+            center: f32,
+            n1: f32,
+            n2: f32,
+        }
+        let total_thickness = self.total_thickness_at(zoom);
+        let mut surfaces: Vec<Surf> = Vec::with_capacity(self.lenses.len());
+        {
+            let mut n1 = spectrum_eta_from_abbe_num(
+                self.lenses.last().unwrap().ior,
+                self.lenses.last().unwrap().vno,
+                input.lambda,
+            );
+            let mut position = -total_thickness;
+            for (k, lens) in self.lenses.iter().rev().enumerate() {
+                let r = -lens.radius;
+                position += lens.thickness_at(zoom);
+                let center = position + r;
+                let n2 = if k > 0 {
+                    spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda)
+                } else {
+                    atmosphere_ior
+                };
+                surfaces.push(Surf {
+                    lens,
+                    r,
+                    center,
+                    n1,
+                    n2,
+                });
+                n1 = n2;
+            }
+        }
+
         let mut ray = input.ray;
         let mut intensity = 1.0;
-        let mut distsum = 0.0;
+        let mut error = 0;
 
-        if self.debug_mode {
-            println!("ray was {:?}", ray);
-        }
-        ray.origin = Point3::from(-Vec3::from(ray.origin));
-        ray.direction = -ray.direction;
-        let t = (-ray.origin.z()) / (ray.direction.z());
-
-        step_hook((ray.origin, ray.point_at_parameter(t), intensity));
-
-        ray.origin = ray.point_at_parameter(t);
-        if self.debug_mode {
-            println!("setting ray to {:?}", ray);
-        }
-        // iterating from first to last. since the first interface is the "last" one when tracing from the sensor.
-        for (_k, lens) in self.lenses.iter().enumerate() {
-            let r = lens.radius;
-
-            let dist = lens.thickness_at(zoom);
-
-            distsum += dist;
+        // `surfaces` is rear-first; iterate it in reverse to traverse front -> rear,
+        // the order a world-side ray actually meets the interfaces.
+        for surf in surfaces.iter().rev() {
+            let lens = surf.lens;
             if lens.lens_type == LensType::Aperture {
                 match aperture_hook(ray) {
                     (false, true) => {
@@ -353,58 +382,149 @@ impl LensAssembly {
                     }
                     (false, false) => {}
                     (true, _) => {
-                        // blocked by aperture (and so no need to trace more) or should return early
+                        // blocked by aperture
                         return None;
                     }
                 }
             }
-            let trace_result: (Ray<S>, Vec3<S>);
+            let res: (Ray<S>, Vec3<S>);
             if lens.anamorphic {
-                trace_result = trace_cylindrical(ray, r, distsum - r, lens.housing_radius).ok()?;
+                res = trace_cylindrical(ray, surf.r, surf.center, lens.housing_radius).ok()?;
             } else if lens.aspheric > 0 {
-                trace_result = trace_aspherical(
+                res = trace_aspherical(
                     ray,
-                    r,
-                    distsum - r,
+                    surf.r,
+                    surf.center,
                     lens.aspheric,
                     lens.correction,
                     lens.housing_radius,
                 )
                 .ok()?;
             } else {
-                trace_result = trace_spherical(ray, r, distsum - r, lens.housing_radius).ok()?;
+                res = trace_spherical(ray, surf.r, surf.center, lens.housing_radius).ok()?;
             }
-            if self.debug_mode {
-                println!("ray is now {:?}", ray);
-            }
-            step_hook((ray.origin, trace_result.0.origin, intensity));
-            ray = trace_result.0;
-            let normal = trace_result.1;
-
-            let n2 = spectrum_eta_from_abbe_num(lens.ior, lens.vno, input.lambda);
-            // if we were to implement reflection as well, it would probably be here and would probably be probabilistic
-            let refract_result = refract(n1, n2, -normal, ray.direction);
+            step_hook((ray.origin, res.0.origin, intensity));
+            ray = res.0;
+            let normal = res.1;
+            // reverse traversal: incident medium is forward's transmitted (n2),
+            // transmitted is forward's incident (n1). The reverse ray meets each surface
+            // from the opposite side, so the normal is flipped relative to incidence.
+            let refract_result = refract(surf.n2, surf.n1, -normal, ray.direction);
             ray.direction = refract_result.0;
-            if self.debug_mode {
-                println!("ray is now {:?}", ray);
-            }
-
             intensity *= refract_result.1;
-
             if intensity < INTENSITY_EPS {
                 error |= 8;
             }
             if error > 0 {
                 return None;
             }
-            n1 = n2;
+            ray.direction = ray.direction.normalized();
         }
-        // finished tracing, re-transform ray back to world space.
-        ray = Ray::new(Point3::from(-Vec3::from(ray.origin)), ray.direction * -1.0);
         Some(Output {
             ray,
             tau: intensity,
         })
+    }
+
+    /// y-slope of the exit ray for a small on-axis forward ray launched from the
+    /// image-side point `(0, 0, film_z)`. The ray emerges collimated (slope 0) exactly
+    /// when `film_z` is the rear focal plane for `lambda_um`, so the zero of this over
+    /// `film_z` is the rear focal plane. Traced without an aperture stop — the rear
+    /// focal plane is a paraxial property of the glass, and a near-axis probe must not
+    /// be clipped. `None` if the probe ray doesn't survive the lens.
+    fn infinity_exit_slope<S: SimdBackend>(
+        &self,
+        zoom: f32,
+        film_z: f32,
+        lambda_um: f32,
+    ) -> Option<f32> {
+        let angle = 0.003_f32; // small enough to stay paraxial, large enough to be well-conditioned
+        let ray: Ray<S> = Ray::new(
+            Point3::new(0.0, 0.0, film_z),
+            Vec3::new(0.0, angle.sin(), angle.cos()),
+        );
+        self.trace_forward(zoom, Input::new(ray, lambda_um), 1.0, |_| (false, false), drop)
+            .map(|o| o.ray.direction.y())
+    }
+
+    /// Rear focal plane (world z) via **forward collimation**: bracket and bisect the
+    /// `film_z` at which a small on-axis forward ray emerges collimated (see
+    /// [`infinity_exit_slope`](Self::infinity_exit_slope)). `None` if no collimation is
+    /// found in range.
+    pub fn rear_focal_plane_forward<S: SimdBackend>(
+        &self,
+        zoom: f32,
+        lambda_um: f32,
+    ) -> Option<f32> {
+        let total = self.total_thickness_at(zoom);
+        let z_hi = -0.3 * total; // closer to the lens
+        let z_lo = -1.8 * total; // well behind the film
+        const STEPS: usize = 200;
+        let mut prev: Option<(f32, f32)> = None;
+        let (mut a, mut b) = (f32::NAN, f32::NAN);
+        for i in 0..=STEPS {
+            let z = z_hi + (z_lo - z_hi) * i as f32 / STEPS as f32;
+            if let Some(s) = self.infinity_exit_slope::<S>(zoom, z, lambda_um) {
+                if let Some((pz, ps)) = prev {
+                    if (ps < 0.0) != (s < 0.0) {
+                        a = pz;
+                        b = z;
+                        break;
+                    }
+                }
+                prev = Some((z, s));
+            }
+        }
+        if a.is_nan() {
+            return None;
+        }
+        let mut fa = self.infinity_exit_slope::<S>(zoom, a, lambda_um)?;
+        for _ in 0..60 {
+            let m = 0.5 * (a + b);
+            let fm = self.infinity_exit_slope::<S>(zoom, m, lambda_um)?;
+            if (fa < 0.0) != (fm < 0.0) {
+                b = m;
+            } else {
+                a = m;
+                fa = fm;
+            }
+        }
+        Some(0.5 * (a + b))
+    }
+
+    /// Rear focal plane (world z) via **reverse convergence**: reverse-trace a small
+    /// fan of axis-parallel rays (an object at infinity) spread over the front aperture
+    /// and average their optical-axis crossings. Heights are kept small so the result
+    /// is the paraxial focus (comparable to
+    /// [`rear_focal_plane_forward`](Self::rear_focal_plane_forward)). `None` if too few
+    /// rays survive.
+    pub fn rear_focal_plane_reverse<S: SimdBackend>(
+        &self,
+        zoom: f32,
+        lambda_um: f32,
+    ) -> Option<f32> {
+        let front_radius = self.lenses.first().unwrap().housing_radius;
+        const N: usize = 8;
+        let mut crossings = Vec::with_capacity(N);
+        for i in 0..N {
+            // small impact heights (2%..16% of the front aperture) -> paraxial
+            let y = (i as f32 + 1.0) / N as f32 * 0.16 * front_radius;
+            let ray: Ray<S> = Ray::new(Point3::new(0.0, y, 1000.0), -Vec3::z_axis());
+            if let Some(o) =
+                self.trace_reverse(zoom, Input::new(ray, lambda_um), 1.0, |_| (false, false), drop)
+            {
+                let pr = o.ray;
+                let dt = (-pr.origin.y()) / pr.direction.y();
+                let z = pr.point_at_parameter(dt).z();
+                if z.is_finite() {
+                    crossings.push(z);
+                }
+            }
+        }
+        if crossings.len() < 4 {
+            return None;
+        }
+        Some(crossings.iter().sum::<f32>() / crossings.len() as f32)
     }
 }
 

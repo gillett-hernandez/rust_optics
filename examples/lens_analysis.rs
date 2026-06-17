@@ -703,76 +703,8 @@ impl eframe::App for SimulationState {
     }
 }
 
-/// The y-slope of a small-angle forward ray launched on-axis from `film_z`. The ray
-/// emerges collimated (slope 0) exactly when `film_z` is the rear focal plane for this
-/// wavelength, so the zero of this function over `film_z` is what `FromInfinity` seeks.
-/// `None` if the probe ray doesn't survive the lens. Note: this is traced *without* the
-/// aperture stop — the rear focal plane is a paraxial property of the glass, and a
-/// near-axis probe must not be clipped by a stopped-down iris.
-fn infinity_exit_slope(
-    lens_assembly: &LensAssembly,
-    film_z: f32,
-    lens_zoom: f32,
-    lambda_um: f32,
-) -> Option<f32> {
-    let angle = 0.003_f32; // small enough to stay paraxial, large enough to be well-conditioned
-    let ray = Ray::new(
-        Point3::new(0.0, 0.0, film_z),
-        Vec3::new(0.0, angle.sin(), angle.cos()),
-    );
-    lens_assembly
-        .trace_forward(lens_zoom, Input::new(ray, lambda_um), 1.0, |_e: Ray| (false, false), drop)
-        .map(|o| o.ray.direction.y())
-}
-
-/// Locates the rear focal plane (world z) for one wavelength by bracketing and bisecting
-/// the zero of [`infinity_exit_slope`] between the lens and well behind the film. `None`
-/// if no sign change (collimation) is found in range.
-fn rear_focal_plane(
-    lens_assembly: &LensAssembly,
-    total_thickness: f32,
-    lens_zoom: f32,
-    lambda_um: f32,
-) -> Option<f32> {
-    // scan from just behind the rear vertex toward (and past) the film for a sign change.
-    let z_hi = -0.3 * total_thickness; // closer to the lens
-    let z_lo = -1.8 * total_thickness; // well behind the film
-    const STEPS: usize = 200;
-    let mut prev: Option<(f32, f32)> = None;
-    let (mut a, mut b) = (f32::NAN, f32::NAN);
-    for i in 0..=STEPS {
-        let z = z_hi + (z_lo - z_hi) * i as f32 / STEPS as f32;
-        if let Some(s) = infinity_exit_slope(lens_assembly, z, lens_zoom, lambda_um) {
-            if let Some((pz, ps)) = prev {
-                if (ps < 0.0) != (s < 0.0) {
-                    a = pz;
-                    b = z;
-                    break;
-                }
-            }
-            prev = Some((z, s));
-        }
-    }
-    if a.is_nan() {
-        return None;
-    }
-    let mut fa = infinity_exit_slope(lens_assembly, a, lens_zoom, lambda_um)?;
-    for _ in 0..60 {
-        let m = 0.5 * (a + b);
-        let fm = infinity_exit_slope(lens_assembly, m, lens_zoom, lambda_um)?;
-        if (fa < 0.0) != (fm < 0.0) {
-            b = m;
-        } else {
-            a = m;
-            fa = fm;
-        }
-    }
-    Some(0.5 * (a + b))
-}
-
 /// Computes a suggested focal distance (world z) and its spread (stddev), per [`FocalMode`].
-/// Both modes use forward tracing, which is the well-behaved direction here. Returns `None`
-/// if nothing usable is found.
+/// Returns `None` if nothing usable is found.
 fn compute_focal_distance(
     lens_assembly: &LensAssembly,
     state: &SimulationState,
@@ -816,18 +748,16 @@ fn compute_focal_distance(
             }
         }
         FocalMode::FromInfinity => {
-            // Object at infinity images at the rear focal plane: the on-axis image-side
-            // point from which forward rays emerge collimated. We locate it per wavelength
-            // (the spread across wavelengths is longitudinal chromatic aberration).
-            //
-            // We deliberately solve this with forward tracing rather than reverse-tracing
-            // literal parallel rays: `trace_reverse` does not currently produce physically
-            // converging output (see notes), so its axis crossings are not a reliable focus.
-            let total = lens_assembly.total_thickness_at(lens_zoom);
+            // Object at infinity images at the rear focal plane. We locate it per
+            // wavelength via the forward collimation root-find; the spread across
+            // wavelengths is longitudinal chromatic aberration. (`rear_focal_plane_reverse`
+            // gives an equivalent result by reverse-tracing literal parallel rays.)
             for w in 0..10 {
                 let lambda_um =
                     (wavelength_bounds.lower + (w as f32 / 10.0) * wavelength_bounds.span()) / 1000.0;
-                if let Some(z) = rear_focal_plane(lens_assembly, total, lens_zoom, lambda_um) {
+                if let Some(z) =
+                    lens_assembly.rear_focal_plane_forward::<Backend>(lens_zoom, lambda_um)
+                {
                     focal_distance_vec.push(z);
                 }
             }
@@ -1131,7 +1061,6 @@ fn run_simulation(
                                 ])
                             })
                         };
-                        let invert = |pt: Point3| Point3(-pt.0);
 
                         let mut segments = Vec::new();
                         let result = lens_assembly.trace_reverse(
@@ -1174,8 +1103,8 @@ fn run_simulation(
                                     draw_line(
                                         &mut film,
                                         bounds,
-                                        swizzle_project(invert(seg_a)),
-                                        swizzle_project(invert(seg_b)),
+                                        swizzle_project(seg_a),
+                                        swizzle_project(seg_b),
                                         lambda,
                                         seg_tau,
                                         DrawMode::XiaolinWu,

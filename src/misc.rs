@@ -87,48 +87,56 @@ pub fn draw_line<S: SimdBackend>(
     let we = SingleWavelength::new(lambda, tau.into());
     let (film_width, film_height) = (film.width, film.height);
 
-    let r = Ray::new(pt0, pt1 - pt0);
-    let (mut min_t, mut max_t) = (f32::INFINITY, 0.0f32);
-    match r.direction.x() {
-        dx if dx > 0.0 => {
-            max_t = max_t.max((clip_window.x.upper - r.origin.x()) / dx);
-            min_t = min_t.min((clip_window.x.upper - r.origin.x()) / dx);
-        }
-        dx if dx < 0.0 => {
-            max_t = max_t.max((clip_window.x.lower - r.origin.x()) / dx);
-            min_t = min_t.min((clip_window.x.lower - r.origin.x()) / dx);
-        }
-        _ => {
-            // no left or right movement, up or down will be computed later
+    // Liang–Barsky: clip the segment pt0 -> pt1 to `clip_window` parametrically.
+    // We accumulate the entering/leaving parameter interval [t0, t1] within [0, 1]
+    // over the four window edges. If the interval collapses (t0 > t1) the segment
+    // lies entirely outside the window and we draw nothing. Clamping the endpoints
+    // to the window border (rather than leaving them off-screen) is what keeps the
+    // later `as usize` pixel casts from saturating negatives to 0 and snapping
+    // lines to the top-left / bottom-left corner.
+    let delta = pt1 - pt0;
+    let (dx, dy) = (delta.x(), delta.y());
+    // For each edge: p is the (signed) rate toward the boundary, q the slack at pt0.
+    // p < 0 => entering edge (raises t0); p > 0 => leaving edge (lowers t1).
+    let p = [-dx, dx, -dy, dy];
+    let q = [
+        pt0.x() - clip_window.x.lower,
+        clip_window.x.upper - pt0.x(),
+        pt0.y() - clip_window.y.lower,
+        clip_window.y.upper - pt0.y(),
+    ];
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for i in 0..4 {
+        if p[i] == 0.0 {
+            // parallel to this edge; if it starts outside the slab, reject entirely
+            // (this also handles the degenerate dx == dy == 0 point case).
+            if q[i] < 0.0 {
+                return;
+            }
+        } else {
+            let t = q[i] / p[i];
+            if p[i] < 0.0 {
+                if t > t1 {
+                    return;
+                }
+                if t > t0 {
+                    t0 = t;
+                }
+            } else {
+                if t < t0 {
+                    return;
+                }
+                if t < t1 {
+                    t1 = t;
+                }
+            }
         }
     }
-    match r.direction.y() {
-        dy if dy > 0.0 => {
-            max_t = max_t.max((clip_window.y.upper - r.origin.y()) / dy);
-            min_t = min_t.min((clip_window.y.upper - r.origin.y()) / dy);
-        }
-        dy if dy < 0.0 => {
-            max_t = max_t.max((clip_window.y.lower - r.origin.y()) / dy);
-            min_t = min_t.min((clip_window.y.lower - r.origin.y()) / dy);
-        }
-        _ => {
-            // no up or down movement.
-
-            // left or right clip bounds should have been computed in other match statement.
-            // unless dx and dy are both 0, in which case
-            return;
-        }
+    if t0 > t1 {
+        return;
     }
-    let clipped0 = if clip_window.x.contains(&pt0.x()) && clip_window.y.contains(&pt0.y()) {
-        pt0
-    } else {
-        r.point_at_parameter(max_t)
-    };
-    let clipped1 = if clip_window.x.contains(&pt1.x()) && clip_window.y.contains(&pt1.y()) {
-        pt1
-    } else {
-        r.point_at_parameter(min_t)
-    };
+    let clipped0 = pt0 + delta * t0;
+    let clipped1 = pt0 + delta * t1;
 
     let (px0, py0) = (
         (film_width as f32 * (clipped0.x() - clip_window.x.lower) / clip_window.x.span()) as usize,
