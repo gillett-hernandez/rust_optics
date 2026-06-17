@@ -1,8 +1,8 @@
 use std::f32::EPSILON;
 use std::f32::consts::{PI, SQRT_2};
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{f32::consts::TAU, fs::File, io::Read};
 
@@ -15,7 +15,7 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 use eframe::egui;
 // use egui::prelude::*;
 use crossbeam::channel::{Receiver, Sender, unbounded};
-use optics::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
+use optics::aperture::{Aperture, ApertureEnum, SimpleBladedAperture};
 use optics::dev::parsing::*;
 use optics::lens_sampler::RadialSampler;
 use optics::math::*;
@@ -26,8 +26,6 @@ use optics::misc::{Cycle, DrawMode, ViewMode, draw_line, project};
 use optics::*;
 
 use structopt::StructOpt;
-use thermite::generic_array::GenericArray;
-use thermite::register::{ShuffleRegister, SwizzleIndices};
 
 // The library is generic over the SIMD backend; this binary monomorphizes on
 // the AVX2+FMA backend. These aliases shadow the generic re-exports from
@@ -726,18 +724,25 @@ fn compute_focal_distance(
                 )
             };
             let origin = Point3::new(0.0, 0.0, state.film_position);
-            let toward_edge =
-                Point3::new(0.0, lens_assembly.lenses.last().unwrap().housing_radius, 0.0) - origin;
+            let toward_edge = Point3::new(
+                0.0,
+                lens_assembly.lenses.last().unwrap().housing_radius,
+                0.0,
+            ) - origin;
             let maximum_angle = -(toward_edge.y() / toward_edge.z()).atan();
             for i in 0..n {
                 let angle = ((i as f32 + 0.5) / n as f32) * maximum_angle;
                 let ray = Ray::new(origin, Vec3::new(0.0, angle.sin(), angle.cos()));
-                for w in 0..10 {
-                    let lambda = wavelength_bounds.lower
-                        + (w as f32 / 10.0) * wavelength_bounds.span();
-                    if let Some(Output { ray: pupil_ray, .. }) =
-                        lens_assembly.trace_forward(lens_zoom, Input::new(ray, lambda / 1000.0), 1.0, aperture_reject, drop)
-                    {
+                for w in 0..100 {
+                    let lambda =
+                        wavelength_bounds.lower + (w as f32 / 100.0) * wavelength_bounds.span();
+                    if let Some(Output { ray: pupil_ray, .. }) = lens_assembly.trace_forward(
+                        lens_zoom,
+                        Input::new(ray, lambda / 1000.0),
+                        1.0,
+                        aperture_reject,
+                        drop,
+                    ) {
                         let dt = (-pupil_ray.origin.y()) / pupil_ray.direction.y();
                         let point = pupil_ray.point_at_parameter(dt);
                         if point.z().is_finite() {
@@ -752,9 +757,10 @@ fn compute_focal_distance(
             // wavelength via the forward collimation root-find; the spread across
             // wavelengths is longitudinal chromatic aberration. (`rear_focal_plane_reverse`
             // gives an equivalent result by reverse-tracing literal parallel rays.)
-            for w in 0..10 {
-                let lambda_um =
-                    (wavelength_bounds.lower + (w as f32 / 10.0) * wavelength_bounds.span()) / 1000.0;
+            for w in 0..100 {
+                let lambda_um = (wavelength_bounds.lower
+                    + (w as f32 / 100.0) * wavelength_bounds.span())
+                    / 1000.0;
                 if let Some(z) =
                     lens_assembly.rear_focal_plane_forward::<Backend>(lens_zoom, lambda_um)
                 {

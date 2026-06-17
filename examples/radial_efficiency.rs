@@ -107,10 +107,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     assert!(!wavelengths.is_empty(), "need at least one wavelength");
 
     // --- fixed lens assembly + aperture ---------------------------------------
+
+    let mut camera_file = File::open(format!("data/cameras/{}.txt", opt.lens))
+        .unwrap_or_else(|e| panic!("could not open lens file {}: {}", opt.lens, e));
     let mut camera_spec = String::new();
-    File::open(&opt.lens)
-        .unwrap_or_else(|e| panic!("could not open lens file {}: {}", opt.lens, e))
-        .read_to_string(&mut camera_spec)?;
+    camera_file.read_to_string(&mut camera_spec).unwrap();
+    
     let (interfaces, _, _) = parse_lenses_from(&camera_spec);
     let assembly = LensAssembly::new(&interfaces);
 
