@@ -5,9 +5,26 @@ use crate::math::*;
 use crate::vec2d::Vec2D;
 use crate::*;
 
+#[derive(Debug, Default, Copy, Clone)]
+pub struct CacheCell {
+    pub angle: f32,        // chief-ray angle from +Z, radians
+    pub angle_spread: f32, // min enclosing circle half-angle of the aperture view, radians
+    pub eccentricity: f32, // ellipse eccentricity of the aperture view, 0 = circular
+}
+
+impl CacheCell {
+    pub fn new(angle: f32, angle_spread: f32, eccentricity: f32) -> Self {
+        CacheCell {
+            angle,
+            angle_spread,
+            eccentricity,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RadialSampler {
-    pub cache: Vec2D<[f32; 2]>,
+    pub cache: Vec2D<CacheCell>,
     pub sensor_size: f32,
     pub wavelength_bounds: Bounds1D,
     pub wavelength_bins: usize,
@@ -34,7 +51,7 @@ impl RadialSampler {
         A: Send + Sync + Aperture,
     {
         // create film of [f32; 4]s
-        let mut film = Vec2D::new(radius_bins, wavelength_bins, [0.0f32; 2]);
+        let mut film = Vec2D::new(radius_bins, wavelength_bins, CacheCell::default());
         let aperture_radius = lens_assembly.aperture_radius();
         film.buffer.par_iter_mut().enumerate().for_each(|(i, v)| {
             let radius_bin = i % radius_bins;
@@ -48,13 +65,13 @@ impl RadialSampler {
             let ray_origin: Point3<S> = Point3::new(radius, 0.0, film_position);
             let mut direction: Vec3<S> = Vec3::z_axis();
             let mut found_valid = false;
-            const MAX_DIRECTION_SEARCH_ATTEMPTS: usize = 1000;
-            const GRAZING_ANGLE_MARGIN: f32 = 0.97;
+            const MAX_DIRECTION_SEARCH_ATTEMPTS: usize = 10000;
+            const GRAZING_ANGLE_MARGIN: f32 = 0.7;
             let mut sampler = StratifiedSampler::new(1000, 1, 1);
             for _ in 0..MAX_DIRECTION_SEARCH_ATTEMPTS {
                 // directions range from straight forward (0 degrees) to almost critical (90 degrees, tangent)
                 let s = sampler.draw_1d();
-                let angle = s.x * std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
+                let angle = (2.0 * s.x - 1.0) * std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
                 direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
 
                 let ray = Ray::new(ray_origin, direction);
@@ -72,52 +89,101 @@ impl RadialSampler {
             }
             if !found_valid {
                 // no valid direction found for this bin, store zero-extent sentinel
-                *v = [0.0; 2];
+                *v = CacheCell::default();
                 return;
             }
-            // expand around direction to find radius and correct centroid.
-            // measured in radians.
-            let mut min_angle: f32 = 0.0;
-            let mut max_angle: f32 = 0.0;
-            let mut search_offset = 0.0;
-            let base_angle = (-direction.x() / direction.z()).atan();
-
-            const MAX_EXPANSION_ITERS: usize = 1000;
-            'outer: for _ in 0..MAX_EXPANSION_ITERS {
-                search_offset += solver_heat;
-                let mut ct = 0;
-                for mult in [-1.0, 1.0] {
-                    let new_angle = base_angle + search_offset * mult;
-                    let new_direction = Vec3::new(-new_angle.sin(), 0.0, new_angle.cos());
-                    let ray = Ray::new(ray_origin, new_direction);
-                    let result = lens_assembly.trace_forward(
+            // The valid directions from this film point are the lens's view of the
+            // aperture: an (approximately elliptical) region that, off-axis, is
+            // foreshortened in the meridional plane, so its sagittal extent is the
+            // larger one. For a non-circular (e.g. bladed) aperture the region also
+            // rotates with the blade orientation, but the cache is indexed by radius
+            // only, so the stored cone must cover the region for *every* azimuth of
+            // the film point.
+            //
+            // We exploit the lens's radial symmetry: rotating the film point and its
+            // probe directions about +Z by `theta` traces the same geometry through
+            // a `theta`-rotated aperture. So we sweep `theta` around the axis and, at
+            // each rotation, expand outward along a fan of azimuths until rays stop
+            // surviving, collecting the boundary directions. The stored cone is the
+            // minimum circle (centered on the recovered chief ray) enclosing every
+            // surviving direction over all rotations. Rays landing inside that circle
+            // but outside the real aperture are rejected at trace time, so the blade
+            // shape and its chromatic rim effects survive.
+            let passes = |origin: Point3<S>, dir: Vec3<S>| -> bool {
+                lens_assembly
+                    .trace_forward(
                         lens_zoom,
-                        Input::new(ray, lambda / 1000.0),
+                        Input::new(Ray::new(origin, dir), lambda / 1000.0),
                         1.0,
                         |e| (aperture.is_rejected(aperture_radius, e.origin), false),
                         drop,
-                    );
-                    if result.is_some() {
-                        // found good direction. keep expanding.
-                        max_angle = max_angle.max(new_angle);
-                        min_angle = min_angle.min(new_angle);
-                    } else {
-                        // found bad direction with this mult. keep expanding until both sides are bad.
-                        ct += 1;
-                        if ct == 2 {
-                            // both sides are bad. break.
-                            break 'outer;
+                    )
+                    .is_some()
+            };
+
+            let chief_angle = (-direction.x() / direction.z()).atan();
+            const MAX_EXPANSION_ITERS: usize = 1000;
+            const N_ROTATIONS: usize = 24; // aperture orientations sampled about +Z
+            const N_AZIMUTH: usize = 8; // probe directions fanned around the chief ray
+
+            // boundary samples in (meridional, sagittal) angle space, relative to +Z
+            let mut mer_min = chief_angle;
+            let mut mer_max = chief_angle;
+            let mut boundary: Vec<(f32, f32)> = Vec::with_capacity(N_ROTATIONS * N_AZIMUTH);
+            for ri in 0..N_ROTATIONS {
+                let (st, ct) = (TAU * ri as f32 / N_ROTATIONS as f32).sin_cos();
+                let origin = Point3::<S>::new(radius * ct, radius * st, film_position);
+                for ai in 0..N_AZIMUTH {
+                    let (sp, cp) = (TAU * ai as f32 / N_AZIMUTH as f32).sin_cos();
+                    // expand outward from the chief direction until a ray fails; the
+                    // region is convex about the chief ray so the first failure is
+                    // the boundary in this azimuth.
+                    let mut last = (chief_angle, 0.0f32);
+                    let mut rho = 0.0f32;
+                    for _ in 0..MAX_EXPANSION_ITERS {
+                        rho += solver_heat;
+                        let m = chief_angle + rho * cp;
+                        let s = rho * sp;
+                        // direction at meridional angle `m`, sagittal angle `s`,
+                        // rotated about +Z by this rotation step to match the origin
+                        let dl = Vec3::<S>::new(-m.tan(), s.tan(), 1.0).normalized();
+                        let dir = Vec3::<S>::new(
+                            dl.x() * ct - dl.y() * st,
+                            dl.x() * st + dl.y() * ct,
+                            dl.z(),
+                        );
+                        if passes(origin, dir) {
+                            last = (m, s);
+                        } else {
+                            break;
                         }
                     }
+                    mer_min = mer_min.min(last.0);
+                    mer_max = mer_max.max(last.0);
+                    boundary.push(last);
                 }
             }
-            let avg_angle = if min_angle != 0.0 || max_angle != 0.0 {
-                (min_angle + max_angle) / 2.0
+
+            // Recenter on the meridional midpoint (the union over rotations is
+            // symmetric about the meridional plane), then take the radius of the
+            // minimum enclosing circle of all boundary samples.
+            let center_angle = 0.5 * (mer_min + mer_max);
+            let mut cone_radius = 0.0f32;
+            let mut sag_half = 0.0f32;
+            for &(m, s) in &boundary {
+                cone_radius = cone_radius.max(((m - center_angle).powi(2) + s * s).sqrt());
+                sag_half = sag_half.max(s.abs());
+            }
+            // ellipse eccentricity of the region (0 = circular), for diagnostics
+            let mer_half = 0.5 * (mer_max - mer_min);
+            let (major, minor) = (mer_half.max(sag_half), mer_half.min(sag_half));
+            let eccentricity = if major > 0.0 {
+                (1.0 - (minor / major).powi(2)).max(0.0).sqrt()
             } else {
                 0.0
             };
 
-            *v = [avg_angle, (max_angle - min_angle).abs() / 2.0];
+            *v = CacheCell::new(center_angle, cone_radius, eccentricity);
         });
         RadialSampler {
             cache: film,
@@ -174,8 +240,14 @@ impl RadialSampler {
             (1.0 - du) * dv,
             du * dv,
         );
-        let phi = w00 * angles00[0] + w10 * angles10[0] + w01 * angles01[0] + w11 * angles11[0];
-        let dphi = w00 * angles00[1] + w10 * angles10[1] + w01 * angles01[1] + w11 * angles11[1];
+        let phi = w00 * angles00.angle
+            + w10 * angles10.angle
+            + w01 * angles01.angle
+            + w11 * angles11.angle;
+        let dphi = w00 * angles00.angle_spread
+            + w10 * angles10.angle_spread
+            + w01 * angles01.angle_spread
+            + w11 * angles11.angle_spread;
 
         // direction is pointing towards the center somewhat and assumes direction.y() == 0.0
         // thus rotate to match actual central point of ray.

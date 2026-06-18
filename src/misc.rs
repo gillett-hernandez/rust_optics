@@ -9,28 +9,35 @@ pub trait Cycle {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum SceneMode<S: SimdBackend> {
+pub enum SceneMode {
     // diffuse emitter texture
-    TexturedWall { distance: f32, texture_scale: f32 },
+    TexturedWall {
+        distance: f32,
+        texture_scale: f32,
+    },
     // small diffuse lights
     PinLight,
 
     // spot light shining with a specific angle
-    SpotLight { pos: Vec3<S>, size: f32, span: f32 },
+    SpotLight {
+        pos: (f32, f32, f32),
+        size: f32,
+        max_angle: f32,
+    },
 }
 
-impl<S: SimdBackend> Cycle for SceneMode<S> {
+impl Cycle for SceneMode {
     fn cycle(self) -> Self {
         match self {
             SceneMode::TexturedWall { .. } => SceneMode::PinLight,
             SceneMode::PinLight => SceneMode::SpotLight {
-                pos: Vec3::ZERO + 100.0 * Vec3::z_axis(),
+                pos: (0.0, 0.0, 100.0),
                 size: 0.1,
-                span: 0.99,
+                max_angle: 0.1,
             },
             // defaults to 5000mm == 5meters away
             SceneMode::SpotLight { .. } => SceneMode::TexturedWall {
-                distance: 5000.0,
+                distance: 1000.0,
                 texture_scale: 1.0,
             },
         }
@@ -39,18 +46,30 @@ impl<S: SimdBackend> Cycle for SceneMode<S> {
 
 #[derive(Copy, Clone, Debug)]
 pub enum ViewMode {
-    Film,
-    SpotOnFilm(f32, f32),
-    XRay { bounds: Bounds2D },
+    Film {
+        visualize_cache: bool,
+    },
+    SpotOnFilm {
+        point: (f32, f32),
+        visualize_cache: bool,
+    },
+    XRay {
+        bounds: Bounds2D,
+    },
 }
 impl Cycle for ViewMode {
     fn cycle(self) -> Self {
         match self {
-            ViewMode::Film => ViewMode::XRay {
+            ViewMode::Film { .. } => ViewMode::XRay {
                 bounds: Bounds2D::new((-1.0, 1.0).into(), (-1.0, 1.0).into()),
             },
-            ViewMode::SpotOnFilm(_, _) => ViewMode::Film,
-            ViewMode::XRay { .. } => ViewMode::SpotOnFilm(0.0, 0.0),
+            ViewMode::SpotOnFilm { .. } => ViewMode::Film {
+                visualize_cache: false,
+            },
+            ViewMode::XRay { .. } => ViewMode::SpotOnFilm {
+                point: (0.0, 0.0),
+                visualize_cache: false,
+            },
         }
     }
 }

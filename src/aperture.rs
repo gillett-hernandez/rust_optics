@@ -38,10 +38,12 @@ impl SimpleBladedAperture {
 
 impl Aperture for SimpleBladedAperture {
     fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool {
-        // NB: the old code zeroed z, divided by aperture_radius, then divided by
-        // the homogeneous w — operations that cancel out and leave x/y unchanged,
-        // so we just read them directly. Both the angle and the distance below
-        // are computed purely from x and y.
+        // NB: the old code zeroed z, divided x/y by aperture_radius, then divided
+        // by the homogeneous w. Scaling by 1/aperture_radius is angle-preserving,
+        // so the `atan2` below can read x/y directly. The *distance*, however, is
+        // scaled by it, and the blade boundary `v` is expressed in unit-aperture
+        // coordinates (<= 1), so the comparison must scale `v` back up by
+        // aperture_radius (equivalently, compare dist/aperture_radius > v).
         let repeat_angle = std::f32::consts::TAU / self.blades as f32;
         match self.blades {
             3..=10 => {
@@ -54,7 +56,7 @@ impl Aperture for SimpleBladedAperture {
                 // let 1/v = (1 + cos / self.p);
                 let v = (1.0 + cos * self.recip_p).recip();
                 let dist = p.x().hypot(p.y());
-                dist > v
+                dist > v * aperture_radius
             }
             _ => CircularAperture::default().is_rejected(aperture_radius, p),
         }

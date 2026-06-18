@@ -1,4 +1,5 @@
-extern crate minifb;
+// #[cfg(feature = "dev")]
+// extern crate minifb;
 
 use crate::math::*;
 use rayon::prelude::*;
@@ -16,16 +17,17 @@ pub mod vec2d;
 pub use crate::aperture::{Aperture, ApertureEnum, CircularAperture, SimpleBladedAperture};
 pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 
-pub use lens::{sample_point_on_lens, LensAssembly, LensInterface, LensType};
+pub use lens::{LensAssembly, LensInterface, LensType, sample_point_on_lens};
 
+#[cfg(feature = "omp")]
 pub extern crate nalgebra as na;
 
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
 
 use std::f32::{
-    consts::{SQRT_2, TAU},
     EPSILON,
+    consts::{SQRT_2, TAU},
 };
 
 fn simulate_phase1<S: SimdBackend>(

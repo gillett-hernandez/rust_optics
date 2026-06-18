@@ -59,6 +59,11 @@ struct Opt {
     #[structopt(long, default_value = "450,550,650")]
     pub wavelengths: String,
 
+    /// Wavelength in nm whose sampler-cache row (angle, angle spread,
+    /// eccentricity vs. radius) is dumped to `<prefix>_cache.csv` and graphed.
+    #[structopt(long, default_value = "550")]
+    pub cache_wavelength: f32,
+
     /// Number of annulus bins along the x axis (radius). Keep < radius-bins so the
     /// cache's per-cell construction lottery averages out.
     #[structopt(long, default_value = "64")]
@@ -83,8 +88,10 @@ struct Opt {
     #[structopt(long, default_value = "0.0")]
     pub film_position_offset: f32,
 
-    /// Angular step used while building the direction cache.
-    #[structopt(long, default_value = "0.01")]
+    /// Angular step (radians) used while building the direction cache. Must be
+    /// finer than the lens's valid-direction cone or the cone's half-spread reads
+    /// 0; ~0.001 resolves the typical ~0.005 rad cones.
+    #[structopt(long, default_value = "0.001")]
     pub solver_heat: f32,
 
     /// Atmosphere IOR used at trace time. Matches the cache (1.0) by default.
@@ -262,6 +269,106 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.present()?;
     }
     println!("wrote {}", png_path);
+
+    // --- sampler-cache dump ---------------------------------------------------
+    // Pull the raw per-(radius, wavelength) data the sampler precomputed and emit
+    // it for the selected wavelength: the cone center angle, its half-spread
+    // ("angle deviation"), and the eccentricity, all vs. distance from the axis.
+    // The cache row for a wavelength is the bin nearest `cache_wavelength`.
+    let v = ((opt.cache_wavelength - sampler.wavelength_bounds.lower)
+        / sampler.wavelength_bounds.span())
+    .clamp(0.0, 1.0 - f32::EPSILON);
+    let wl_bin = (v * sampler.wavelength_bins as f32) as usize;
+    println!(
+        "dumping sampler cache for {} nm (wavelength bin {} of {})...",
+        opt.cache_wavelength, wl_bin, sampler.wavelength_bins
+    );
+
+    // (radius, angle, angle_spread, eccentricity) for every radius bin
+    let cache_rows: Vec<(f32, f32, f32, f32)> = (0..sampler.radius_bins)
+        .map(|rb| {
+            let radius = radius_cap * rb as f32 / sampler.radius_bins as f32;
+            let cell = sampler.cache.at(rb, wl_bin);
+            (radius, cell.angle, cell.angle_spread, cell.eccentricity)
+        })
+        .collect();
+
+    let cache_csv_path = format!("{}_cache.csv", opt.out);
+    {
+        let mut csv = File::create(&cache_csv_path)?;
+        writeln!(csv, "radius,angle,angle_spread,eccentricity")?;
+        for &(r, angle, spread, ecc) in &cache_rows {
+            writeln!(csv, "{},{},{},{}", r, angle, spread, ecc)?;
+        }
+    }
+    println!("wrote {}", cache_csv_path);
+
+    // One PNG per quantity. They share the radius x-axis but have independent
+    // y-scales, so a separate chart per quantity reads more clearly than one
+    // overlay.
+    let plot_cache = |suffix: &str,
+                      title: &str,
+                      y_desc: &str,
+                      series: Vec<(f32, f32)>|
+     -> Result<(), Box<dyn Error>> {
+        let path = format!("{}_{}.png", opt.out, suffix);
+        let root = BitMapBackend::new(&path, (1000, 700)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let (mut y_lo, mut y_hi) = series.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &(_, y)| {
+            (lo.min(y), hi.max(y))
+        });
+        // include zero and pad a degenerate (flat) range so the axis is drawable
+        y_lo = y_lo.min(0.0);
+        y_hi = y_hi.max(0.0);
+        if (y_hi - y_lo).abs() < 1e-6 {
+            y_lo -= 1.0;
+            y_hi += 1.0;
+        }
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption(title, ("sans-serif", 22))
+            .margin(15)
+            .x_label_area_size(45)
+            .y_label_area_size(60)
+            .build_cartesian_2d(0f32..radius_cap, y_lo..y_hi)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("distance from optical axis (mm)")
+            .y_desc(y_desc)
+            .draw()?;
+
+        let style = ShapeStyle {
+            color: RED.to_rgba(),
+            filled: false,
+            stroke_width: 2,
+        };
+        chart.draw_series(LineSeries::new(series, style))?;
+        root.present()?;
+        println!("wrote {}", path);
+        Ok(())
+    };
+
+    let label = format!("{} — {} nm", opt.lens, opt.cache_wavelength);
+    plot_cache(
+        "cache_angle",
+        &format!("Sampler cache: cone angle — {}", label),
+        "cone center angle (radians)",
+        cache_rows.iter().map(|&(r, a, _, _)| (r, a)).collect(),
+    )?;
+    plot_cache(
+        "cache_angle_spread",
+        &format!("Sampler cache: angle deviation — {}", label),
+        "cone half-spread (radians)",
+        cache_rows.iter().map(|&(r, _, s, _)| (r, s)).collect(),
+    )?;
+    plot_cache(
+        "cache_eccentricity",
+        &format!("Sampler cache: eccentricity — {}", label),
+        "eccentricity (radians)",
+        cache_rows.iter().map(|&(r, _, _, e)| (r, e)).collect(),
+    )?;
 
     Ok(())
 }

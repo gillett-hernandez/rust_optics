@@ -1,19 +1,20 @@
 [package]
 name = "rust_optics"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Gillett Hernandez <gillett.hernandez@gmail.com>"]
 edition = "2024"
 
 [features]
 dev = ["line_drawing", "image"]
+omp = ["dep:nalgebra"]
 
 
 [dependencies]
-itertools = "~0.14"
+itertools = "~0.15"
 math = { git = "https://github.com/gillett-hernandez/rust_cg_math" }
 thermite = { git = "https://github.com/raygon-renderer/thermite" }
 minifb = "~0.28"
-nalgebra = "~0.32.6"
+nalgebra = { version = "~0.35", optional = true }
 num_cpus = "~1.17"
 ordered-float = "~5.3"
 paw = "~1.0"

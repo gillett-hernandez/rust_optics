@@ -1,5 +1,5 @@
 use std::f32::EPSILON;
-use std::f32::consts::{PI, SQRT_2};
+use std::f32::consts::{FRAC_PI_2, PI, SQRT_2};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -22,7 +22,7 @@ use optics::math::*;
 use optics::vec2d::Vec2D;
 use rayon::prelude::*;
 // use lens_sampler::RadialSampler;
-use optics::misc::{Cycle, DrawMode, ViewMode, draw_line, project};
+use optics::misc::{Cycle, DrawMode, SceneMode, ViewMode, draw_line, project};
 use optics::*;
 
 use structopt::StructOpt;
@@ -37,7 +37,6 @@ type Point3 = optics::math::Point3<Backend>;
 type Ray = optics::math::Ray<Backend>;
 type F32x4 = optics::math::F32x4<Backend>;
 type XYZColor = optics::math::XYZColor<Backend>;
-type SceneMode = optics::misc::SceneMode<Backend>;
 
 /// Which way rays are traced through the assembly.
 ///   - `FromFilm`  : forward tracing, sensor -> scene (the radial sampler applies).
@@ -173,6 +172,16 @@ pub struct SimulationState {
 }
 
 impl SimulationState {
+    pub fn toggle_visualize_cache(&mut self) {
+        match &mut self.view_mode {
+            ViewMode::Film { visualize_cache }
+            | ViewMode::SpotOnFilm {
+                visualize_cache, ..
+            } => *visualize_cache = !*visualize_cache,
+            // ViewMode::SpotOnFilm {  visualize_cache, .. } => *visualize_cache = !*visualize_cache,
+            ViewMode::XRay { .. } => {}
+        }
+    }
     pub fn data_update(&mut self, message: (String, Command)) {
         if self.maybe_sender.is_none() {
             // in puppet
@@ -196,11 +205,19 @@ impl SimulationState {
                     self.view_mode = self.view_mode.cycle();
                     self.dirty = true;
                 }
+                (target, Command::Advance) if target.starts_with("visualize_cache") => {
+                    println!("received toggle cache visualization command");
+                    self.toggle_visualize_cache();
+                    self.dirty = true;
+                }
                 (target, Command::ChangeFloat(v)) if target.starts_with("view_mode") => {
                     assert!(target.find('.') == Some("view_mode".len()));
                     let tail = &target["view_mode".len() + 1..];
                     match &mut self.view_mode {
-                        ViewMode::SpotOnFilm(x, y) => match tail {
+                        ViewMode::SpotOnFilm {
+                            point: (x, y),
+                            visualize_cache,
+                        } => match tail {
                             "x" => {
                                 *x = v;
                                 self.dirty = true;
@@ -295,19 +312,23 @@ impl SimulationState {
                                 self.dirty = true;
                             }
                         }
-                        SceneMode::SpotLight { pos, size, span } => match tail {
+                        SceneMode::SpotLight {
+                            pos,
+                            size,
+                            max_angle,
+                        } => match tail {
                             "pos.x" => {
-                                *pos = Vec3::new(v, pos.y(), pos.z());
+                                pos.0 = v;
                                 println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
                             "pos.y" => {
-                                *pos = Vec3::new(pos.x(), v, pos.z());
+                                pos.1 = v;
                                 println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
                             "pos.z" => {
-                                *pos = Vec3::new(pos.x(), pos.y(), v);
+                                pos.2 = v;
                                 println!("pos = {:?}", pos);
                                 self.dirty = true;
                             }
@@ -322,15 +343,15 @@ impl SimulationState {
                                 *size = v;
                                 self.dirty = true;
                             }
-                            "span" => {
+                            "max_angle" => {
                                 println!();
-                                if v < 0.0 || v >= 1.0 {
+                                if v < 0.0 || v >= FRAC_PI_2 {
                                     println!(
-                                        "attempted to change span to some nonsensical value, ignoring.\nspan should be between 0 and 1, where near 1 cooresponds to a very focused spotlight."
+                                        "attempted to change max_angle to some nonsensical value, ignoring.\nmax_angle should be between 0 and PI/2, where near 0 cooresponds to a very focused spotlight."
                                     );
                                     return;
                                 }
-                                *span = v;
+                                *max_angle = v;
                                 self.dirty = true;
                             }
                             _ => {
@@ -451,35 +472,39 @@ impl eframe::App for SimulationState {
                             .unwrap()
                     }
                 }
-                SceneMode::SpotLight { pos, size, span } => {
-                    let [mut x, mut y, mut z, _] = pos.as_array();
+                SceneMode::SpotLight {
+                    pos,
+                    size,
+                    max_angle: span,
+                } => {
+                    let (x, y, z) = pos;
 
                     let mut any_changed = false;
 
                     ui.label("pos.x");
-                    let response = ui.add(egui::DragValue::new(&mut x).speed(0.01));
+                    let response = ui.add(egui::DragValue::new(x).speed(0.01));
                     any_changed |= response.changed();
 
                     ui.label("pos.y");
-                    let response = ui.add(egui::DragValue::new(&mut y).speed(0.01));
+                    let response = ui.add(egui::DragValue::new(y).speed(0.01));
                     any_changed |= response.changed();
 
                     ui.label("pos.z");
-                    let response = ui.add(egui::DragValue::new(&mut z).speed(0.01));
+                    let response = ui.add(egui::DragValue::new(z).speed(0.01));
                     any_changed |= response.changed();
 
                     if any_changed {
                         sender
-                            .try_send(("scene_mode.pos.x".into(), Command::ChangeFloat(x)))
+                            .try_send(("scene_mode.pos.x".into(), Command::ChangeFloat(*x)))
                             .unwrap();
                         sender
-                            .try_send(("scene_mode.pos.y".into(), Command::ChangeFloat(y)))
+                            .try_send(("scene_mode.pos.y".into(), Command::ChangeFloat(*y)))
                             .unwrap();
                         sender
-                            .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(z)))
+                            .try_send(("scene_mode.pos.z".into(), Command::ChangeFloat(*z)))
                             .unwrap();
                     }
-                    *pos = Vec3::new(x, y, z);
+                    *pos = (*x, *y, *z);
 
                     ui.label("size");
                     let response = ui.add(
@@ -491,11 +516,11 @@ impl eframe::App for SimulationState {
                             .try_send(("scene_mode.size".into(), Command::ChangeFloat(*size)))
                             .unwrap()
                     }
-                    ui.label("span");
-                    let response = ui.add(egui::Slider::new(span, 0.0..=1.0));
+                    ui.label("max angle");
+                    let response = ui.add(egui::Slider::new(span, 0.0..=1.57));
                     if response.changed() {
                         sender
-                            .try_send(("scene_mode.span".into(), Command::ChangeFloat(*span)))
+                            .try_send(("scene_mode.max_angle".into(), Command::ChangeFloat(*span)))
                             .unwrap()
                     }
                 }
@@ -512,7 +537,10 @@ impl eframe::App for SimulationState {
 
             ui.label(format!("view mode is {:?}", self.view_mode));
             match &mut self.view_mode {
-                ViewMode::SpotOnFilm(x, y) => {
+                ViewMode::SpotOnFilm {
+                    point: (x, y),
+                    visualize_cache,
+                } => {
                     let mut any_changed = false;
 
                     ui.label("x");
@@ -529,6 +557,14 @@ impl eframe::App for SimulationState {
                             .unwrap();
                         sender
                             .try_send(("view_mode.y".into(), Command::ChangeFloat(*y)))
+                            .unwrap();
+                    }
+                    ui.label("visualize cache");
+                    let response = ui.add(egui::Checkbox::new(visualize_cache, "toggle"));
+
+                    if response.changed() {
+                        sender
+                            .try_send(("visualize_cache".into(), Command::Advance))
                             .unwrap();
                     }
                 }
@@ -597,6 +633,16 @@ impl eframe::App for SimulationState {
                         // shrink or grow by `adjustment`
                         bounds.y.lower -= adjustment / 2.0;
                         bounds.y.upper += adjustment / 2.0;
+                    }
+                }
+                ViewMode::Film { visualize_cache } => {
+                    ui.label("visualize cache");
+                    let response = ui.add(egui::Checkbox::new(visualize_cache, "toggle"));
+
+                    if response.changed() {
+                        sender
+                            .try_send(("visualize_cache".into(), Command::Advance))
+                            .unwrap();
                     }
                 }
                 _ => {}
@@ -834,7 +880,7 @@ fn run_simulation(
     let mut wall_position = 5000.0;
     let mut texture_scale = 1.0;
 
-    let mut samples_per_iteration = 1usize;
+    let samples_per_iteration = 1usize;
     let mut total_samples = 0;
 
     let direction_cache_radius_bins = 512;
@@ -914,6 +960,7 @@ fn run_simulation(
                 local_simulation_state.heat_bias,
                 local_simulation_state.sensor_size,
             );
+            println!("cleared direction cache");
         }
 
         // A focal-distance sweep probes the assembly with a fan of rays (geometry per
@@ -976,13 +1023,17 @@ fn run_simulation(
                             wall_texture.eval_at(lambda, (sample.x, sample.y)),
                         )
                     }
-                    SceneMode::SpotLight { pos, span, size } => {
+                    SceneMode::SpotLight {
+                        pos,
+                        max_angle,
+                        size,
+                    } => {
                         let (r, phi) =
                             (sampler.draw_1d().x.sqrt() * size, sampler.draw_1d().x * TAU);
-                        let (px, py) = (pos.x() + r * phi.cos(), pos.y() + r * phi.sin());
-                        let ray_origin = Point3::new(px, py, pos.z());
+                        let (px, py) = (pos.0 + r * phi.cos(), pos.1 + r * phi.sin());
+                        let ray_origin = Point3::new(px, py, pos.2);
                         // span is the lower limit of the cosine of the angle to sample
-                        let max_angle = span.acos();
+
                         let angle = sampler.draw_1d().x.sqrt() * max_angle;
                         let other_angle = sampler.draw_1d().x * TAU;
                         let dir = Vec3::new(
@@ -1007,7 +1058,10 @@ fn run_simulation(
 
                 b += 1;
                 match local_simulation_state.view_mode {
-                    ViewMode::Film | ViewMode::SpotOnFilm(_, _) => {
+                    ViewMode::Film { visualize_cache }
+                    | ViewMode::SpotOnFilm {
+                        visualize_cache, ..
+                    } => {
                         let result = lens_assembly.trace_reverse(
                             lens_zoom,
                             Input::new(ray, lambda / 1000.0),
@@ -1132,7 +1186,7 @@ fn run_simulation(
             }
         } else {
             match local_simulation_state.view_mode {
-                ViewMode::Film => {
+                ViewMode::Film { visualize_cache } => {
                     let pair = film
                         .buffer
                         .par_iter_mut()
@@ -1194,6 +1248,27 @@ fn run_simulation(
                                     },
                                     drop,
                                 );
+                                if visualize_cache {
+                                    // directly read energy
+                                    let [x, y, _, _] = point.as_array();
+
+                                    let film_radius = y.hypot(x);
+
+                                    let u = film_radius / (SQRT_2 * direction_cache.sensor_size);
+                                    let v = ((lambda - direction_cache.wavelength_bounds.lower)
+                                        / direction_cache.wavelength_bounds.span())
+                                    .clamp(0.0, 1.0 - EPSILON);
+                                    debug_assert!(u < 1.0 && v < 1.0, "{}, {}", u, v);
+                                    let d_x_idx = (u * direction_cache.radius_bins as f32) as usize;
+                                    let d_y_idx =
+                                        (v * direction_cache.wavelength_bins as f32) as usize;
+                                    let angles00 = direction_cache.cache.at(d_x_idx, d_y_idx);
+                                    *pixel += XYZColor::from(SingleWavelength::new(
+                                        550.0,
+                                        angles00.angle_spread,
+                                    ));
+                                    continue;
+                                }
                                 if let Some(Output {
                                     ray: pupil_ray,
                                     tau,
@@ -1255,12 +1330,16 @@ fn run_simulation(
                                             ));
                                         }
 
-                                        SceneMode::SpotLight { pos, size, span } => {
-                                            let t = (pos.z() - pupil_ray.origin.z())
+                                        SceneMode::SpotLight {
+                                            pos,
+                                            size,
+                                            max_angle: span,
+                                        } => {
+                                            let t = (pos.2 - pupil_ray.origin.z())
                                                 / pupil_ray.direction.z();
                                             let point_at_light_z = pupil_ray.point_at_parameter(t);
-                                            let m = if (point_at_light_z.x() - pos.x()).powi(2)
-                                                + (point_at_light_z.y() - pos.y()).powi(2)
+                                            let m = if (point_at_light_z.x() - pos.0).powi(2)
+                                                + (point_at_light_z.y() - pos.1).powi(2)
                                                 < size
                                             {
                                                 // if position matches
@@ -1290,7 +1369,10 @@ fn run_simulation(
                     b += pair.1;
                 }
 
-                ViewMode::SpotOnFilm(x, y) => {
+                ViewMode::SpotOnFilm {
+                    point: (x, y),
+                    visualize_cache,
+                } => {
                     let pair = film
                         .buffer
                         .par_iter_mut()
@@ -1320,7 +1402,7 @@ fn run_simulation(
                             u -= 0.5;
                             v -= 0.5;
                             let radial_distance =
-                                (u.hypot(v) / SQRT_2 / 2.0).clamp(0.0, 1.0 - EPSILON);
+                                (u.hypot(v) / (SQRT_2 / 2.0)).clamp(0.0, 1.0 - EPSILON);
                             let angle = ((u.atan2(v) + PI) / TAU).clamp(0.0, 1.0 - EPSILON);
                             let dir =
                                 random_cosine_direction(Sample2D::new(angle, radial_distance));
@@ -1402,12 +1484,16 @@ fn run_simulation(
                                             ));
                                         }
                                     }
-                                    SceneMode::SpotLight { pos, size, span } => {
-                                        let t = (pos.z() - pupil_ray.origin.z())
+                                    SceneMode::SpotLight {
+                                        pos,
+                                        size,
+                                        max_angle: span,
+                                    } => {
+                                        let t = (pos.2 - pupil_ray.origin.z())
                                             / pupil_ray.direction.z();
                                         let point_at_light_z = pupil_ray.point_at_parameter(t);
-                                        let m = if (point_at_light_z.x() - pos.x()).powi(2)
-                                            + (point_at_light_z.y() - pos.y()).powi(2)
+                                        let m = if (point_at_light_z.x() - pos.0).powi(2)
+                                            + (point_at_light_z.y() - pos.1).powi(2)
                                             < size
                                         {
                                             // if position matches

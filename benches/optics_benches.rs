@@ -15,7 +15,7 @@
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use math::spectral::BOUNDED_VISIBLE_RANGE;
 use optics::math::*;
@@ -24,14 +24,12 @@ use optics::aperture::ApertureSample;
 use optics::lens::{
     camera_space_to_plane, camera_space_to_sphere, evaluate_aspherical,
     evaluate_aspherical_derivative, fresnel, plane_to_camera_space, refract, sample_point_on_lens,
-    sphere_to_camera_space, spectrum_eta_from_abbe_num, trace_aspherical, trace_cylindrical,
+    spectrum_eta_from_abbe_num, sphere_to_camera_space, trace_aspherical, trace_cylindrical,
     trace_spherical,
 };
 use optics::lens_sampler::RadialSampler;
 // Input, PlaneRay, SphereRay come in via `optics::math::*` above.
-use optics::{
-    parse_lenses_from, Aperture, CircularAperture, LensAssembly, SimpleBladedAperture,
-};
+use optics::{Aperture, CircularAperture, LensAssembly, SimpleBladedAperture, parse_lenses_from};
 
 // The library is generic over the SIMD backend; the benches pick a concrete one
 // (AVX2+FMA). These aliases shadow the generic re-exports from `optics::math::*`
@@ -44,10 +42,16 @@ type Ray = optics::math::Ray<Backend>;
 
 /// A real, multi-element double-Gauss-ish lens so the assembly traces exercise
 /// a representative number of surfaces.
-const LENS_SPEC: &str = include_str!("../data/cameras/petzval_kodak.txt");
+const LENS_SPEC_SHORT: &str = include_str!("../data/cameras/petzval_kodak.txt");
+const LENS_SPEC_LONG: &str = include_str!("../data/cameras/double_gauss_angenioux.txt");
 
-fn build_assembly() -> LensAssembly {
-    let (lenses, _, _) = parse_lenses_from(LENS_SPEC);
+fn build_assembly_small() -> LensAssembly {
+    let (lenses, _, _) = parse_lenses_from(LENS_SPEC_SHORT);
+    LensAssembly::new(&lenses)
+}
+
+fn build_assembly_long() -> LensAssembly {
+    let (lenses, _, _) = parse_lenses_from(LENS_SPEC_LONG);
     LensAssembly::new(&lenses)
 }
 
@@ -63,11 +67,23 @@ fn bench_surface_intersect(c: &mut Criterion) {
     let correction = [0.0f32; 4];
 
     group.bench_function("trace_spherical", |b| {
-        b.iter(|| trace_spherical(black_box(ray), black_box(0.9), black_box(-1.0), black_box(0.9)))
+        b.iter(|| {
+            trace_spherical(
+                black_box(ray),
+                black_box(0.9),
+                black_box(-1.0),
+                black_box(0.9),
+            )
+        })
     });
     group.bench_function("trace_cylindrical", |b| {
         b.iter(|| {
-            trace_cylindrical(black_box(ray), black_box(0.9), black_box(1.0), black_box(0.9))
+            trace_cylindrical(
+                black_box(ray),
+                black_box(0.9),
+                black_box(1.0),
+                black_box(0.9),
+            )
         })
     });
     group.bench_function("trace_aspherical", |b| {
@@ -84,7 +100,12 @@ fn bench_surface_intersect(c: &mut Criterion) {
     });
     group.bench_function("evaluate_aspherical", |b| {
         b.iter(|| {
-            evaluate_aspherical(black_box(ray.origin), black_box(0.9), black_box(1), black_box(correction))
+            evaluate_aspherical(
+                black_box(ray.origin),
+                black_box(0.9),
+                black_box(1),
+                black_box(correction),
+            )
         })
     });
     group.bench_function("evaluate_aspherical_derivative", |b| {
@@ -129,9 +150,7 @@ fn bench_optics_math(c: &mut Criterion) {
         })
     });
     group.bench_function("spectrum_eta_from_abbe_num", |b| {
-        b.iter(|| {
-            spectrum_eta_from_abbe_num(black_box(1.5), black_box(54.0), black_box(0.55))
-        })
+        b.iter(|| spectrum_eta_from_abbe_num(black_box(1.5), black_box(54.0), black_box(0.55)))
     });
     group.finish();
 }
@@ -152,14 +171,22 @@ fn bench_coordinate_space(c: &mut Criterion) {
     });
     group.bench_function("sphere_to_camera_space", |b| {
         b.iter(|| {
-            sphere_to_camera_space::<Backend>(black_box(sphere_ray), black_box(-100.0), black_box(100.0))
+            sphere_to_camera_space::<Backend>(
+                black_box(sphere_ray),
+                black_box(-100.0),
+                black_box(100.0),
+            )
         })
     });
     group.bench_function("camera_space_to_sphere", |b| {
-        b.iter(|| camera_space_to_sphere(black_box(camera_ray), black_box(-100.0), black_box(100.0)))
+        b.iter(|| {
+            camera_space_to_sphere(black_box(camera_ray), black_box(-100.0), black_box(100.0))
+        })
     });
     group.bench_function("sample_point_on_lens", |b| {
-        b.iter(|| sample_point_on_lens::<Backend>(black_box(35.0), black_box(15.0), black_box(sample)))
+        b.iter(|| {
+            sample_point_on_lens::<Backend>(black_box(35.0), black_box(15.0), black_box(sample))
+        })
     });
     group.finish();
 }
@@ -186,44 +213,47 @@ fn bench_aperture(c: &mut Criterion) {
 fn bench_assembly_trace(c: &mut Criterion) {
     let mut group = c.benchmark_group("assembly_trace");
 
-    let assembly = build_assembly();
-    let aperture = SimpleBladedAperture::new(6, 0.5);
-    let aperture_radius = assembly.aperture_radius();
-    let film_position = assembly.total_thickness_at(0.0);
+    let assemblies = [build_assembly_small(), build_assembly_long()];
 
-    // forward: from the sensor plane out through the front of the lens
-    let forward_input = Input::new(
-        Ray::new(Point3::new(0.0, 0.0, -film_position), Vec3::z_axis()),
-        0.55,
-    );
-    group.bench_function("trace_forward", |b| {
-        b.iter(|| {
-            assembly.trace_forward(
-                black_box(0.0),
-                black_box(forward_input),
-                black_box(1.04),
-                |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
-                drop,
-            )
-        })
-    });
+    for (i, assembly) in assemblies.iter().enumerate() {
+        let aperture = SimpleBladedAperture::new(6, 0.5);
+        let aperture_radius = assembly.aperture_radius();
+        let film_position = assembly.total_thickness_at(0.0);
 
-    // reverse: from a world-space ray back to the sensor
-    let reverse_input = Input::new(
-        Ray::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0)),
-        0.55,
-    );
-    group.bench_function("trace_reverse", |b| {
-        b.iter(|| {
-            assembly.trace_reverse(
-                black_box(0.0),
-                black_box(reverse_input),
-                black_box(1.04),
-                |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
-                drop,
-            )
-        })
-    });
+        // forward: from the sensor plane out through the front of the lens
+        let forward_input = Input::new(
+            Ray::new(Point3::new(0.0, 0.0, -film_position), Vec3::z_axis()),
+            0.55,
+        );
+        group.bench_function(format!("trace_forward_{}", i), |b| {
+            b.iter(|| {
+                assembly.trace_forward(
+                    black_box(0.0),
+                    black_box(forward_input),
+                    black_box(1.04),
+                    |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
+                    drop,
+                )
+            })
+        });
+
+        // reverse: from a world-space ray back to the sensor
+        let reverse_input = Input::new(
+            Ray::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0)),
+            0.55,
+        );
+        group.bench_function(format!("trace_reverse_{}", i), |b| {
+            b.iter(|| {
+                assembly.trace_reverse(
+                    black_box(0.0),
+                    black_box(reverse_input),
+                    black_box(1.04),
+                    |ray| (aperture.is_rejected(aperture_radius, ray.origin), false),
+                    drop,
+                )
+            })
+        });
+    }
     group.finish();
 }
 
@@ -233,43 +263,46 @@ fn bench_radial_sampler(c: &mut Criterion) {
     const RADIUS_BINS: usize = 64;
     const WAVELENGTH_BINS: usize = 64;
 
-    let assembly = build_assembly();
-    let aperture = SimpleBladedAperture::new(6, 0.5);
-    let film_position = assembly.total_thickness_at(0.0);
+    let assemblies = [build_assembly_small(), build_assembly_long()];
 
-    let build = || {
-        RadialSampler::new::<Backend, _>(
-            35.0,
-            RADIUS_BINS,
-            WAVELENGTH_BINS,
-            BOUNDED_VISIBLE_RANGE,
-            -film_position,
-            &assembly,
-            0.0,
-            &aperture,
-            0.1,
-            35.0,
-        )
-    };
+    for (i, assembly) in assemblies.iter().enumerate() {
+        let aperture = SimpleBladedAperture::new(6, 0.5);
+        let film_position = assembly.total_thickness_at(0.0);
 
-    // sample-time cost (the hot path during rendering)
-    let sampler = build();
-    group.bench_function("sample", |b| {
-        b.iter(|| {
-            let lambda = BOUNDED_VISIBLE_RANGE.sample(Sample1D::new_random_sample().x);
-            let point = Point3::new(3.0, 2.0, -film_position);
-            sampler.sample(
-                black_box(lambda),
-                black_box(point),
-                black_box(Sample2D::new_random_sample()),
-                black_box(Sample1D::new_random_sample()),
+        let build = || {
+            RadialSampler::new::<Backend, _>(
+                35.0,
+                RADIUS_BINS,
+                WAVELENGTH_BINS,
+                BOUNDED_VISIBLE_RANGE,
+                -film_position,
+                &assembly,
+                0.0,
+                &aperture,
+                0.1,
+                35.0,
             )
-        })
-    });
+        };
 
-    // one-off cache construction cost
-    group.sample_size(20);
-    group.bench_function("new_cache", |b| b.iter(build));
+        // sample-time cost (the hot path during rendering)
+        let sampler = build();
+        group.bench_function(format!("sample_{}", i), |b| {
+            b.iter(|| {
+                let lambda = BOUNDED_VISIBLE_RANGE.sample(Sample1D::new_random_sample().x);
+                let point = Point3::new(3.0, 2.0, -film_position);
+                sampler.sample(
+                    black_box(lambda),
+                    black_box(point),
+                    black_box(Sample2D::new_random_sample()),
+                    black_box(Sample1D::new_random_sample()),
+                )
+            })
+        });
+
+        // one-off cache construction cost
+        group.sample_size(20);
+        group.bench_function(format!("new_cache_{}", i), |b| b.iter(build));
+    }
     group.finish();
 }
 

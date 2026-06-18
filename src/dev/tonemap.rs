@@ -1,23 +1,20 @@
 #![allow(unused, unused_imports)]
 
-use crate::vec2d::Vec2D;
 use crate::math::*;
+use crate::vec2d::Vec2D;
 
 // extern crate exr;
 // use exr::prelude::rgba_image::*;
-use nalgebra::{Matrix3, Vector3};
 
-use std::sync::LazyLock;
 use std::time::Instant;
 
-/// Constant CIE XYZ -> linear sRGB matrix. Hoisted out of the per-pixel
-/// `map()` so it isn't reconstructed for every pixel of every frame.
-static XYZ_TO_RGB: LazyLock<Matrix3<f32>> = LazyLock::new(|| {
-    Matrix3::new(
-        3.24096994, -1.53738318, -0.49861076, -0.96924364, 1.8759675, 0.04155506, 0.05563008,
-        -0.20397696, 1.05697151,
-    )
-});
+/// Constant CIE XYZ -> linear sRGB matrix, stored row-major. Applied directly
+/// in `map()` as three dot products — no matrix library needed.
+const XYZ_TO_RGB: [[f32; 3]; 3] = [
+    [3.24096994, -1.53738318, -0.49861076],
+    [-0.96924364, 1.8759675, 0.04155506],
+    [0.05563008, -0.20397696, 1.05697151],
+];
 
 pub trait Tonemapper {
     /// Returns `(srgb, linear)` as `[r, g, b, 0.0]` arrays.
@@ -85,13 +82,16 @@ impl Tonemapper for sRGB {
             scaled_cie_xyz_color = XYZColor::black();
         }
 
-        let intermediate = *XYZ_TO_RGB
-            * Vector3::new(
-                scaled_cie_xyz_color.x(),
-                scaled_cie_xyz_color.y(),
-                scaled_cie_xyz_color.z(),
-            );
-
+        // CIE XYZ -> linear sRGB via thermite's SIMD 3x3 matrix-vector product.
+        // The XYZ tristimulus already live in lanes 0..3 of the color register,
+        // so we feed it directly. `cols` holds the matrix *columns* (lane 3
+        // unused) so `COLUMN_MAJOR = true` skips an internal transpose.
+        let cols = [
+            F32x4::<S>::new([XYZ_TO_RGB[0][0], XYZ_TO_RGB[1][0], XYZ_TO_RGB[2][0], 0.0]),
+            F32x4::<S>::new([XYZ_TO_RGB[0][1], XYZ_TO_RGB[1][1], XYZ_TO_RGB[2][1], 0.0]),
+            F32x4::<S>::new([XYZ_TO_RGB[0][2], XYZ_TO_RGB[1][2], XYZ_TO_RGB[2][2], 0.0]),
+        ];
+        let intermediate = scaled_cie_xyz_color.0.mat3_vec3_product::<true>(&cols);
         let rgb_linear = [intermediate[0], intermediate[1], intermediate[2], 0.0];
         // per-channel linear -> sRGB transfer
         let to_srgb = |c: f32| {
