@@ -101,6 +101,32 @@ struct Opt {
     /// Output file prefix; writes `<prefix>.png` and `<prefix>.csv`.
     #[structopt(long, default_value = "radial_efficiency")]
     pub out: String,
+
+    /// Seed for the (deterministic) efficiency-measurement sampling. Same seed +
+    /// args ⇒ identical curves.
+    #[structopt(long, default_value = "0")]
+    pub seed: u64,
+}
+
+/// Tiny deterministic PRNG (splitmix64) so the efficiency measurement is seedable
+/// and reproducible without depending on a particular `rand` version.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        SplitMix64(seed)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    }
+    /// uniform f32 in [0, 1)
+    fn f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -151,22 +177,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // --- measure efficiency ---------------------------------------------------
-    // Each graph point is an annulus bin [r_lo, r_hi); we draw many random film
-    // points within it (random radius + rotation angle) and, for each, importance-
-    // sample a direction and trace it. Efficiency = survivors / samples. The cache
-    // is finer than the graph (radius_bins >> radius_steps) so its per-cell
-    // construction lottery averages out into a smooth, renderer-relevant curve:
-    // the expected pass rate for a source at that field radius.
+    // Each graph point is an annulus bin [r_lo, r_hi). We draw film points within it
+    // and, for each, importance-sample a cone direction and trace it; efficiency =
+    // survivors / samples. To keep the curve smooth and reproducible, the cone
+    // direction sample (s2d) is *stratified* over a jittered g×g grid of the unit
+    // square — the dimension that dominates the pass/fail outcome — while the film
+    // point (area-uniform radius + angle) and wavelength sample are jittered from a
+    // seeded PRNG. The grid rounds `samples` up to the next square, g² per bin.
+    let grid = (opt.samples as f32).sqrt().ceil().max(1.0) as usize;
+    let samples_per_bin = grid * grid;
     println!(
-        "measuring efficiency over {} annuli x {} wavelengths ({} samples each)...",
+        "measuring efficiency over {} annuli x {} wavelengths ({} samples each, seed {})...",
         opt.radius_steps,
         wavelengths.len(),
-        opt.samples
+        samples_per_bin,
+        opt.seed
     );
     let mut radii: Vec<f32> = Vec::with_capacity(opt.radius_steps);
     // curves[w] = Vec<(radius, efficiency)> for wavelengths[w]
     let mut curves: Vec<Vec<(f32, f32)>> =
         vec![Vec::with_capacity(opt.radius_steps); wavelengths.len()];
+
+    let mut rng = SplitMix64::new(opt.seed);
 
     for step in 0..opt.radius_steps {
         let r_lo = radius_cap * step as f32 / opt.radius_steps as f32;
@@ -176,31 +208,36 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         for (w, &lambda_nm) in wavelengths.iter().enumerate() {
             let mut successes = 0usize;
-            for _ in 0..opt.samples {
-                // random film point in this annulus (uniform in radius, any angle)
-                let radius = r_lo + (r_hi - r_lo) * rand::random::<f32>();
-                let theta = std::f32::consts::TAU * rand::random::<f32>();
-                let point = Point3::new(radius * theta.cos(), radius * theta.sin(), -film_position);
+            for gj in 0..grid {
+                for gi in 0..grid {
+                    // film point in this annulus: area-uniform radius, any angle
+                    let radius = (r_lo * r_lo + (r_hi * r_hi - r_lo * r_lo) * rng.f32()).sqrt();
+                    let theta = std::f32::consts::TAU * rng.f32();
+                    let point =
+                        Point3::new(radius * theta.cos(), radius * theta.sin(), -film_position);
 
-                let direction = sampler.sample(
-                    lambda_nm,
-                    point,
-                    Sample2D::new_random_sample(),
-                    Sample1D::new_random_sample(),
-                );
-                let ray = Ray::new(point, direction);
-                let result = assembly.trace_forward(
-                    0.0,
-                    Input::new(ray, lambda_nm / 1000.0),
-                    opt.atmosphere_ior,
-                    |e| (aperture.is_rejected(aperture_radius, e.origin), false),
-                    drop,
-                );
-                if result.is_some() {
-                    successes += 1;
+                    // stratified + jittered cone-direction sample over the g×g grid
+                    let s2d = Sample2D::new(
+                        (gi as f32 + rng.f32()) / grid as f32,
+                        (gj as f32 + rng.f32()) / grid as f32,
+                    );
+                    let s1 = Sample1D::new(rng.f32());
+
+                    let direction = sampler.sample(lambda_nm, point, s2d, s1);
+                    let ray = Ray::new(point, direction);
+                    let result = assembly.trace_forward(
+                        0.0,
+                        Input::new(ray, lambda_nm / 1000.0),
+                        opt.atmosphere_ior,
+                        |e| (aperture.is_rejected(aperture_radius, e.origin), false),
+                        drop,
+                    );
+                    if result.is_some() {
+                        successes += 1;
+                    }
                 }
             }
-            let efficiency = successes as f32 / opt.samples as f32;
+            let efficiency = successes as f32 / samples_per_bin as f32;
             curves[w].push((r_mid, efficiency));
         }
     }

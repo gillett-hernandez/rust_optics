@@ -62,27 +62,44 @@ impl RadialSampler {
             let radius = radius_cap * radius_bin as f32 / radius_bins as f32;
             // find direction (with fixed y = 0) for sampling aperture and outer pupil, and find corresponding sampling "radius"
 
+            // The cache is indexed by film radius only, so the stored cone must cover
+            // the aperture's image for *every* azimuth of the film point — i.e. the
+            // union of the (possibly bladed) aperture over all blade orientations.
+            // The union of a polygon over all rotations about its center is exactly
+            // its circumscribed disk, so we build the cone against a *circular*
+            // aperture at the circumscribed radius. The boundary is then the image of
+            // a circle (a smooth ellipse), which yields smooth, deterministic cone
+            // parameters. Rays inside the cone but outside the real aperture are
+            // rejected at trace time, so the blade shape and rim effects survive.
+            let bound = aperture.bounding_radius(aperture_radius);
+            let passes = |origin: Point3<S>, dir: Vec3<S>| -> bool {
+                lens_assembly
+                    .trace_forward(
+                        lens_zoom,
+                        Input::new(Ray::new(origin, dir), lambda / 1000.0),
+                        1.0,
+                        |e| (e.origin.x().hypot(e.origin.y()) > bound, false),
+                        drop,
+                    )
+                    .is_some()
+            };
+
             let ray_origin: Point3<S> = Point3::new(radius, 0.0, film_position);
             let mut direction: Vec3<S> = Vec3::z_axis();
             let mut found_valid = false;
-            const MAX_DIRECTION_SEARCH_ATTEMPTS: usize = 10000;
             const GRAZING_ANGLE_MARGIN: f32 = 0.7;
-            let mut sampler = StratifiedSampler::new(1000, 1, 1);
-            for _ in 0..MAX_DIRECTION_SEARCH_ATTEMPTS {
-                // directions range from straight forward (0 degrees) to almost critical (90 degrees, tangent)
-                let s = sampler.draw_1d();
-                let angle = (2.0 * s.x - 1.0) * std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
+            const DIRECTION_SEARCH_SAMPLES: usize = 1000;
+            let max_search_angle = std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
+            // Deterministic uniform sweep over [-max, max) of meridional angles (0 =
+            // straight ahead, ±max ≈ grazing) for any direction interior to the cone.
+            // Its exact value doesn't matter — the bisection below recenters — so a
+            // fixed sweep (vs. the old RNG search) makes the whole cache reproducible.
+            for i in 0..DIRECTION_SEARCH_SAMPLES {
+                let t = (i as f32 + 0.5) / DIRECTION_SEARCH_SAMPLES as f32;
+                let angle = (2.0 * t - 1.0) * max_search_angle;
                 direction = Vec3::new(-angle.sin(), 0.0, angle.cos());
 
-                let ray = Ray::new(ray_origin, direction);
-                let result = lens_assembly.trace_forward(
-                    lens_zoom,
-                    Input::new(ray, lambda / 1000.0),
-                    1.0,
-                    |e| (aperture.is_rejected(aperture_radius, e.origin), false),
-                    drop,
-                );
-                if let Some(Output { .. }) = result {
+                if passes(ray_origin, direction) {
                     found_valid = true;
                     break;
                 }
@@ -92,91 +109,46 @@ impl RadialSampler {
                 *v = CacheCell::default();
                 return;
             }
-            // The valid directions from this film point are the lens's view of the
-            // aperture: an (approximately elliptical) region that, off-axis, is
-            // foreshortened in the meridional plane, so its sagittal extent is the
-            // larger one. For a non-circular (e.g. bladed) aperture the region also
-            // rotates with the blade orientation, but the cache is indexed by radius
-            // only, so the stored cone must cover the region for *every* azimuth of
-            // the film point.
-            //
-            // We exploit the lens's radial symmetry: rotating the film point and its
-            // probe directions about +Z by `theta` traces the same geometry through
-            // a `theta`-rotated aperture. So we sweep `theta` around the axis and, at
-            // each rotation, expand outward along a fan of azimuths until rays stop
-            // surviving, collecting the boundary directions. The stored cone is the
-            // minimum circle (centered on the recovered chief ray) enclosing every
-            // surviving direction over all rotations. Rays landing inside that circle
-            // but outside the real aperture are rejected at trace time, so the blade
-            // shape and its chromatic rim effects survive.
-            let passes = |origin: Point3<S>, dir: Vec3<S>| -> bool {
-                lens_assembly
-                    .trace_forward(
-                        lens_zoom,
-                        Input::new(Ray::new(origin, dir), lambda / 1000.0),
-                        1.0,
-                        |e| (aperture.is_rejected(aperture_radius, e.origin), false),
-                        drop,
-                    )
-                    .is_some()
+            // The circular-aperture image is convex, so along any line the pass/fail
+            // boundary is a single transition we can locate by bisection. `probe`
+            // tests the direction at meridional angle `m`, sagittal angle `s`; the
+            // chief direction is interior, so probes through it pass at the center.
+            let chief_angle = (-direction.x() / direction.z()).atan();
+            let hi0 = std::f32::consts::FRAC_PI_2 * GRAZING_ANGLE_MARGIN;
+            let probe = |m: f32, s: f32| -> bool {
+                let dir = Vec3::<S>::new(-m.tan(), s.tan(), 1.0).normalized();
+                passes(ray_origin, dir)
+            };
+            // bisect the offset t in [0, hi0] where `f(t)` goes true (interior) -> false
+            let bisect = |f: &dyn Fn(f32) -> bool| -> f32 {
+                if f(hi0) {
+                    return hi0; // boundary beyond the bracket; clamp
+                }
+                let (mut lo, mut hi) = (0.0f32, hi0);
+                while hi - lo > solver_heat {
+                    let mid = 0.5 * (lo + hi);
+                    if f(mid) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo
             };
 
-            let chief_angle = (-direction.x() / direction.z()).atan();
-            const MAX_EXPANSION_ITERS: usize = 1000;
-            const N_ROTATIONS: usize = 24; // aperture orientations sampled about +Z
-            const N_AZIMUTH: usize = 8; // probe directions fanned around the chief ray
-
-            // boundary samples in (meridional, sagittal) angle space, relative to +Z
-            let mut mer_min = chief_angle;
-            let mut mer_max = chief_angle;
-            let mut boundary: Vec<(f32, f32)> = Vec::with_capacity(N_ROTATIONS * N_AZIMUTH);
-            for ri in 0..N_ROTATIONS {
-                let (st, ct) = (TAU * ri as f32 / N_ROTATIONS as f32).sin_cos();
-                let origin = Point3::<S>::new(radius * ct, radius * st, film_position);
-                for ai in 0..N_AZIMUTH {
-                    let (sp, cp) = (TAU * ai as f32 / N_AZIMUTH as f32).sin_cos();
-                    // expand outward from the chief direction until a ray fails; the
-                    // region is convex about the chief ray so the first failure is
-                    // the boundary in this azimuth.
-                    let mut last = (chief_angle, 0.0f32);
-                    let mut rho = 0.0f32;
-                    for _ in 0..MAX_EXPANSION_ITERS {
-                        rho += solver_heat;
-                        let m = chief_angle + rho * cp;
-                        let s = rho * sp;
-                        // direction at meridional angle `m`, sagittal angle `s`,
-                        // rotated about +Z by this rotation step to match the origin
-                        let dl = Vec3::<S>::new(-m.tan(), s.tan(), 1.0).normalized();
-                        let dir = Vec3::<S>::new(
-                            dl.x() * ct - dl.y() * st,
-                            dl.x() * st + dl.y() * ct,
-                            dl.z(),
-                        );
-                        if passes(origin, dir) {
-                            last = (m, s);
-                        } else {
-                            break;
-                        }
-                    }
-                    mer_min = mer_min.min(last.0);
-                    mer_max = mer_max.max(last.0);
-                    boundary.push(last);
-                }
-            }
-
-            // Recenter on the meridional midpoint (the union over rotations is
-            // symmetric about the meridional plane), then take the radius of the
-            // minimum enclosing circle of all boundary samples.
-            let center_angle = 0.5 * (mer_min + mer_max);
-            let mut cone_radius = 0.0f32;
-            let mut sag_half = 0.0f32;
-            for &(m, s) in &boundary {
-                cone_radius = cone_radius.max(((m - center_angle).powi(2) + s * s).sqrt());
-                sag_half = sag_half.max(s.abs());
-            }
-            // ellipse eccentricity of the region (0 = circular), for diagnostics
-            let mer_half = 0.5 * (mer_max - mer_min);
-            let (major, minor) = (mer_half.max(sag_half), mer_half.min(sag_half));
+            // Meridional extent (both sides of the chief), then recenter. The chief is
+            // a *random* valid direction, so we must measure the sagittal extent at the
+            // recovered meridional center — not at the chief — otherwise it samples an
+            // arbitrary chord of the ellipse and the eccentricity becomes noisy.
+            let mer_plus = bisect(&|t| probe(chief_angle + t, 0.0));
+            let mer_minus = bisect(&|t| probe(chief_angle - t, 0.0));
+            let center_angle = chief_angle + 0.5 * (mer_plus - mer_minus);
+            let a_m = 0.5 * (mer_plus + mer_minus); // meridional semi-axis
+            let a_s = bisect(&|t| probe(center_angle, t)); // sagittal semi-axis, at center
+            // minimum enclosing circle of the axis-aligned ellipse
+            let cone_radius = a_m.max(a_s);
+            // ellipse eccentricity (0 = circular), for diagnostics
+            let (major, minor) = (a_m.max(a_s), a_m.min(a_s));
             let eccentricity = if major > 0.0 {
                 (1.0 - (minor / major).powi(2)).max(0.0).sqrt()
             } else {

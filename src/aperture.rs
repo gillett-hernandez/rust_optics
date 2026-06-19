@@ -3,6 +3,15 @@ use crate::math::*;
 pub trait Aperture {
     /// returns whether the specific point would be / is rejected by the aperture
     fn is_rejected<S: SimdBackend>(&self, aperture_radius: f32, p: Point3<S>) -> bool;
+
+    /// The radius of the smallest circle that fully contains the aperture opening.
+    /// Defaults to `aperture_radius` (a valid upper bound for any shape inscribed in
+    /// the housing); shapes that fit inside a smaller circle should override this to
+    /// give consumers a tighter bound. Used by `RadialSampler` to size its sampling
+    /// cone to the union of the aperture over all rotations (= its circumscribed disk).
+    fn bounding_radius(&self, aperture_radius: f32) -> f32 {
+        aperture_radius
+    }
 }
 
 #[derive(Default, Copy, Clone, Debug)]
@@ -61,6 +70,16 @@ impl Aperture for SimpleBladedAperture {
             _ => CircularAperture::default().is_rejected(aperture_radius, p),
         }
     }
+
+    fn bounding_radius(&self, aperture_radius: f32) -> f32 {
+        // the blade boundary `v` peaks at `max_radius` (the vertices), so the
+        // circumscribed circle has radius `max_radius * aperture_radius`. The
+        // >10-blade case degrades to a full circle, matching `is_rejected`.
+        match self.blades {
+            3..=10 => self.max_radius * aperture_radius,
+            _ => aperture_radius,
+        }
+    }
 }
 macro_rules! generate_enum {
     ($($e:ident),+) => {
@@ -76,6 +95,14 @@ macro_rules! generate_enum {
                 match self {
                     $(
                         ApertureEnum::$e(inner) => inner.is_rejected(aperture_radius, p),
+                   )+
+                }
+            }
+
+            fn bounding_radius(&self, aperture_radius: f32) -> f32 {
+                match self {
+                    $(
+                        ApertureEnum::$e(inner) => inner.bounding_radius(aperture_radius),
                    )+
                 }
             }
