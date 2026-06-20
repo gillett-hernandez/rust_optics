@@ -7,6 +7,11 @@
 //!   - `coordinate_space` : plane/sphere/camera ray-space conversions
 //!   - `aperture`         : rejection test + importance sampling
 //!   - `radial_sampler`   : cache construction + per-sample lookup
+//!   - `poly`             : polynomial-optics build + eval/map (needs `--features poly`)
+//!
+//! The `poly` group is gated on the `poly` feature; run it with
+//! `cargo bench --features poly`. Without the feature it compiles to a no-op, so
+//! the other groups still run via a plain `cargo bench`.
 //!
 //! Post-migration these run against `rust_cg_math` 3.0.0 (thermite backend).
 //! The library is generic over the backend; these benches monomorphize on
@@ -31,11 +36,15 @@ use optics::lens_sampler::RadialSampler;
 // Input, PlaneRay, SphereRay come in via `optics::math::*` above.
 use optics::{Aperture, CircularAperture, LensAssembly, SimpleBladedAperture, parse_lenses_from};
 
+#[cfg(feature = "poly")]
+use optics::na::SVector;
+#[cfg(feature = "poly")]
+use optics::poly::{build_forward, PolyAssembly};
+
 // The library is generic over the SIMD backend; the benches pick a concrete one
 // (AVX2+FMA). These aliases shadow the generic re-exports from `optics::math::*`
 // so the bench bodies can use the bare type names.
-// type Backend = thermite::backend::x86_v3::X86V3;
-type Backend = thermite::backend::scalar::Scalar;
+type Backend = thermite::backend::x86_v3::X86V3;
 type Vec3 = optics::math::Vec3<Backend>;
 type Point3 = optics::math::Point3<Backend>;
 type Ray = optics::math::Ray<Backend>;
@@ -306,6 +315,78 @@ fn bench_radial_sampler(c: &mut Criterion) {
     group.finish();
 }
 
+/// Polynomial-optics build + evaluation costs, laid out so they line up directly
+/// against `assembly_trace` (raw tracing) and `radial_sampler` (cache + sample):
+///   - `build_forward_*` : cost of composing one wavelength's polynomial system
+///   - `new_cache_*`     : full per-wavelength cache build (forward + reverse)
+///   - `eval_*`          : pure polynomial evaluation (no ray-space conversion)
+///   - `map_forward_*` / `map_reverse_*` : drop-in replacements for
+///     `trace_forward` / `trace_reverse` (convert → eval → convert)
+/// Each is swept over both lenses (`_0` = small, `_1` = long) and degrees 1/3/5.
+#[cfg(feature = "poly")]
+fn bench_poly(c: &mut Criterion) {
+    let mut group = c.benchmark_group("poly");
+    // modest bin count so the full-cache build stays bench-friendly
+    const WAVELENGTH_BINS: usize = 8;
+    let degrees = [1usize, 3, 5];
+
+    let assemblies = [build_assembly_small(), build_assembly_long()];
+
+    for (i, assembly) in assemblies.iter().enumerate() {
+        let film_position = assembly.total_thickness_at(0.0);
+        // same probe rays as `assembly_trace`, for a like-for-like comparison
+        let forward_ray: Ray = Ray::new(Point3::new(0.0, 0.0, -film_position), Vec3::z_axis());
+        let reverse_ray: Ray = Ray::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0));
+        let reduced = SVector::from([1.0f32, 0.5, 0.02, 0.01]);
+
+        for &d in &degrees {
+            // per-system build cost (one wavelength): the fundamental build unit
+            group.bench_function(format!("build_forward_{}_deg{}", i, d), |b| {
+                b.iter(|| build_forward(black_box(assembly), 0.0, 0.55, 1.0, black_box(d)).unwrap())
+            });
+
+            // pre-built cache + a standalone system for the eval/map hot paths
+            let poly =
+                PolyAssembly::new(assembly, 0.0, 1.0, d, BOUNDED_VISIBLE_RANGE, WAVELENGTH_BINS)
+                    .unwrap();
+            let system = build_forward(assembly, 0.0, 0.55, 1.0, d).unwrap();
+
+            // pure polynomial evaluation (no ray-space conversion)
+            group.bench_function(format!("eval_{}_deg{}", i, d), |b| {
+                b.iter(|| system.eval(black_box(reduced)))
+            });
+            // forward map: drop-in for trace_forward
+            group.bench_function(format!("map_forward_{}_deg{}", i, d), |b| {
+                b.iter(|| poly.map_forward::<Backend>(black_box(forward_ray), black_box(550.0)))
+            });
+            // reverse map: drop-in for trace_reverse
+            group.bench_function(format!("map_reverse_{}_deg{}", i, d), |b| {
+                b.iter(|| poly.map_reverse::<Backend>(black_box(reverse_ray), black_box(550.0)))
+            });
+        }
+
+        // one-off cache construction cost (forward + reverse, all bins), degree 3
+        group.sample_size(20);
+        group.bench_function(format!("new_cache_{}_deg3", i), |b| {
+            b.iter(|| {
+                PolyAssembly::new(
+                    black_box(assembly),
+                    0.0,
+                    1.0,
+                    3,
+                    BOUNDED_VISIBLE_RANGE,
+                    WAVELENGTH_BINS,
+                )
+                .unwrap()
+            })
+        });
+    }
+    group.finish();
+}
+
+#[cfg(not(feature = "poly"))]
+fn bench_poly(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_surface_intersect,
@@ -314,5 +395,6 @@ criterion_group!(
     bench_aperture,
     bench_assembly_trace,
     bench_radial_sampler,
+    bench_poly,
 );
 criterion_main!(benches);

@@ -11,6 +11,8 @@ pub mod lens;
 pub mod lens_sampler;
 pub mod math;
 pub mod misc;
+#[cfg(feature = "poly")]
+pub mod poly;
 pub mod spectrum;
 pub mod vec2d;
 
@@ -19,7 +21,7 @@ pub use crate::math::{Input, Output, PlaneRay, SphereRay};
 
 pub use lens::{LensAssembly, LensInterface, LensType, sample_point_on_lens};
 
-#[cfg(feature = "omp")]
+#[cfg(any(feature = "omp", feature = "poly"))]
 pub extern crate nalgebra as na;
 
 #[cfg(feature = "dev")]

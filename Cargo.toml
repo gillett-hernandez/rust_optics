@@ -7,6 +7,7 @@ edition = "2024"
 [features]
 dev = ["line_drawing", "image"]
 omp = ["dep:nalgebra"]
+poly = ["dep:nalgebra"]
 
 
 [dependencies]
@@ -45,10 +46,14 @@ path = "src/lib.rs"
 
 [[example]]
 name = "lens_analysis"
-required-features = ["dev"]
+required-features = ["dev", "poly"]
 
 [[example]]
 name = "radial_efficiency"
+
+[[example]]
+name = "poly_error"
+required-features = ["poly"]
 
 [[bench]]
 name = "optics_benches"

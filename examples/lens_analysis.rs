@@ -19,6 +19,7 @@ use optics::aperture::{Aperture, ApertureEnum, SimpleBladedAperture};
 use optics::dev::parsing::*;
 use optics::lens_sampler::RadialSampler;
 use optics::math::*;
+use optics::poly::{PolyAssembly, PolyLens};
 use optics::vec2d::Vec2D;
 use rayon::prelude::*;
 // use lens_sampler::RadialSampler;
@@ -151,6 +152,10 @@ pub struct SimulationState {
     pub lens_zoom: f32,
     pub paused: bool,
     pub use_sampler: bool,
+    /// When set, the Film view evaluates the polynomial lens model
+    /// ([`PolyLens::map_forward`]) instead of `trace_forward`, and the XRay view
+    /// overlays the poly-predicted exit ray (in red) on the real traced path.
+    pub use_poly: bool,
     pub trace_direction: TraceDirection,
     pub focal_mode: FocalMode,
     // set by the egui side to request a focal-distance sweep on the next frame
@@ -278,6 +283,12 @@ impl SimulationState {
                 (target, Command::Advance) if target.starts_with("toggle sampler") => {
                     self.use_sampler = !self.use_sampler;
                     println!("use sampler is now {:?}", self.use_sampler);
+                }
+                (target, Command::Advance) if target.starts_with("toggle poly") => {
+                    self.use_poly = !self.use_poly;
+                    println!("poly mode is now {:?}", self.use_poly);
+                    // switching evaluators changes the Film image; start fresh
+                    self.dirty = true;
                 }
                 (target, Command::Advance) if target.starts_with("trace_direction") => {
                     self.trace_direction = self.trace_direction.toggle();
@@ -675,6 +686,14 @@ impl eframe::App for SimulationState {
                 self.use_sampler = !self.use_sampler;
             }
 
+            let response = ui.add(egui::Button::new("toggle poly mode"));
+            if response.clicked() {
+                sender
+                    .try_send((String::from("toggle poly"), Command::Advance))
+                    .unwrap();
+                self.use_poly = !self.use_poly;
+            }
+
             let response = ui.add(egui::Button::new("toggle trace direction"));
             if response.clicked() {
                 sender
@@ -723,6 +742,7 @@ impl eframe::App for SimulationState {
             }
             // ui.add(egui::tex)
             ui.label(format!("trace direction: {:?}", self.trace_direction));
+            ui.label(format!("poly mode: {}", self.use_poly));
             ui.label(format!("focal mode: {:?}", self.focal_mode));
             match self.focal_distance {
                 Some(d) => ui.label(format!(
@@ -899,6 +919,17 @@ fn run_simulation(
         local_simulation_state.sensor_size,
     );
 
+    // Polynomial lens model, evaluated as a drop-in for `trace_forward` when poly
+    // mode is on. `None` if the assembly has a surface type the poly builder does
+    // not support yet (aspheric/cylindrical) — poly mode then silently falls back
+    // to tracing. Rebuilt alongside the direction cache.
+    const POLY_DEGREE: usize = 3;
+    const POLY_WAVELENGTH_BINS: usize = 64;
+    let mut poly_lens: Option<PolyLens> =
+        PolyAssembly::new(&lens_assembly, lens_zoom, 1.0, POLY_DEGREE, wavelength_bounds, POLY_WAVELENGTH_BINS)
+            .ok()
+            .map(PolyLens::new);
+
     let mut wavelength_sweep: f32 = 0.0;
     let mut wavelength_sweep_speed = 0.001;
     let mut efficiency = 0.0;
@@ -960,6 +991,16 @@ fn run_simulation(
                 local_simulation_state.heat_bias,
                 local_simulation_state.sensor_size,
             );
+            poly_lens = PolyAssembly::new(
+                &lens_assembly,
+                lens_zoom,
+                1.0,
+                POLY_DEGREE,
+                wavelength_bounds,
+                POLY_WAVELENGTH_BINS,
+            )
+            .ok()
+            .map(PolyLens::new);
             println!("cleared direction cache");
         }
 
@@ -1232,22 +1273,35 @@ fn run_simulation(
                                 let ray = Ray::new(point, v);
 
                                 attempts += 1;
-                                // do actual tracing through lens for film sample
-                                let result = lens_assembly.trace_forward(
-                                    lens_zoom,
-                                    Input::new(ray, lambda / 1000.0),
-                                    1.04,
-                                    |e| {
-                                        (
-                                            local_simulation_state.aperture.is_rejected(
-                                                local_simulation_state.aperture_radius,
-                                                e.origin,
-                                            ),
-                                            false,
-                                        )
-                                    },
-                                    drop,
-                                );
+                                // Either evaluate the polynomial lens model (poly mode)
+                                // or trace through the lens. The poly map has no aperture
+                                // test and no transmittance, so it reports tau = 1 and is
+                                // never vignetted — handy for seeing the model in
+                                // isolation. Falls back to tracing if poly is unsupported.
+                                let result = match (
+                                    local_simulation_state.use_poly,
+                                    poly_lens.as_ref(),
+                                ) {
+                                    (true, Some(pl)) => Some(Output::new(
+                                        pl.map_forward::<Backend>(ray, lambda),
+                                        1.0,
+                                    )),
+                                    _ => lens_assembly.trace_forward(
+                                        lens_zoom,
+                                        Input::new(ray, lambda / 1000.0),
+                                        1.04,
+                                        |e| {
+                                            (
+                                                local_simulation_state.aperture.is_rejected(
+                                                    local_simulation_state.aperture_radius,
+                                                    e.origin,
+                                                ),
+                                                false,
+                                            )
+                                        },
+                                        drop,
+                                    ),
+                                };
                                 if visualize_cache {
                                     // directly read energy
                                     let [x, y, _, _] = point.as_array();
@@ -1631,6 +1685,36 @@ fn run_simulation(
                                 DrawMode::XiaolinWu,
                             );
                         }
+
+                        // Poly-mode overlay: the polynomial model only knows the
+                        // endpoints, so it draws the lens as a black box — a straight
+                        // red chord from the film point to the front pupil, plus the
+                        // predicted exit ray. Runs even when the real ray is vignetted,
+                        // so where the model diverges from the trace is visible.
+                        if local_simulation_state.use_poly {
+                            if let Some(pl) = poly_lens.as_ref() {
+                                const POLY_OVERLAY_LAMBDA: f32 = 650.0; // red
+                                let pe = pl.map_forward::<Backend>(ray, lambda);
+                                draw_line(
+                                    &mut film,
+                                    bounds,
+                                    swizzle_project(ray.origin),
+                                    swizzle_project(pe.origin),
+                                    POLY_OVERLAY_LAMBDA,
+                                    1.0,
+                                    DrawMode::XiaolinWu,
+                                );
+                                draw_line(
+                                    &mut film,
+                                    bounds,
+                                    swizzle_project(pe.origin),
+                                    swizzle_project(pe.point_at_parameter(1000.0)),
+                                    POLY_OVERLAY_LAMBDA,
+                                    1.0,
+                                    DrawMode::XiaolinWu,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1708,6 +1792,7 @@ fn main() {
         maybe_sender: None,
         maybe_receiver: None,
         use_sampler: true,
+        use_poly: false,
         trace_direction: TraceDirection::FromFilm,
         focal_mode: FocalMode::FromFilm,
         recompute_focal: false,
