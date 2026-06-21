@@ -39,6 +39,11 @@ type Ray = optics::math::Ray<Backend>;
 type F32x4 = optics::math::F32x4<Backend>;
 type XYZColor = optics::math::XYZColor<Backend>;
 
+/// Surrounding-medium (world-side) IOR. Used by every trace *and* the poly model
+/// build so poly mode and traced mode agree; previously the Film path used 1.04
+/// while the poly model / XRay used 1.0, which shifted focus/scale between modes.
+const ATMOSPHERE_IOR: f32 = 1.0;
+
 /// Which way rays are traced through the assembly.
 ///   - `FromFilm`  : forward tracing, sensor -> scene (the radial sampler applies).
 ///   - `FromScene` : reverse tracing, scene -> sensor.
@@ -156,6 +161,9 @@ pub struct SimulationState {
     /// ([`PolyLens::map_forward`]) instead of `trace_forward`, and the XRay view
     /// overlays the poly-predicted exit ray (in red) on the real traced path.
     pub use_poly: bool,
+    /// In poly mode, whether to apply barrel vignetting + Fresnel falloff (the
+    /// realistic look) or skip them (fast, flat-bright, aperture-stop only).
+    pub poly_vignetting: bool,
     pub trace_direction: TraceDirection,
     pub focal_mode: FocalMode,
     // set by the egui side to request a focal-distance sweep on the next frame
@@ -283,6 +291,11 @@ impl SimulationState {
                 (target, Command::Advance) if target.starts_with("toggle sampler") => {
                     self.use_sampler = !self.use_sampler;
                     println!("use sampler is now {:?}", self.use_sampler);
+                }
+                (target, Command::Advance) if target.starts_with("toggle poly vignetting") => {
+                    self.poly_vignetting = !self.poly_vignetting;
+                    println!("poly vignetting is now {:?}", self.poly_vignetting);
+                    self.dirty = true;
                 }
                 (target, Command::Advance) if target.starts_with("toggle poly") => {
                     self.use_poly = !self.use_poly;
@@ -694,6 +707,14 @@ impl eframe::App for SimulationState {
                 self.use_poly = !self.use_poly;
             }
 
+            let response = ui.add(egui::Button::new("toggle poly vignetting"));
+            if response.clicked() {
+                sender
+                    .try_send((String::from("toggle poly vignetting"), Command::Advance))
+                    .unwrap();
+                self.poly_vignetting = !self.poly_vignetting;
+            }
+
             let response = ui.add(egui::Button::new("toggle trace direction"));
             if response.clicked() {
                 sender
@@ -742,7 +763,10 @@ impl eframe::App for SimulationState {
             }
             // ui.add(egui::tex)
             ui.label(format!("trace direction: {:?}", self.trace_direction));
-            ui.label(format!("poly mode: {}", self.use_poly));
+            ui.label(format!(
+                "poly mode: {} (vignetting: {})",
+                self.use_poly, self.poly_vignetting
+            ));
             ui.label(format!("focal mode: {:?}", self.focal_mode));
             match self.focal_distance {
                 Some(d) => ui.label(format!(
@@ -926,7 +950,7 @@ fn run_simulation(
     const POLY_DEGREE: usize = 3;
     const POLY_WAVELENGTH_BINS: usize = 64;
     let mut poly_lens: Option<PolyLens> =
-        PolyAssembly::new(&lens_assembly, lens_zoom, 1.0, POLY_DEGREE, wavelength_bounds, POLY_WAVELENGTH_BINS)
+        PolyAssembly::new(&lens_assembly, lens_zoom, ATMOSPHERE_IOR, POLY_DEGREE, wavelength_bounds, POLY_WAVELENGTH_BINS)
             .ok()
             .map(PolyLens::new);
 
@@ -994,7 +1018,7 @@ fn run_simulation(
             poly_lens = PolyAssembly::new(
                 &lens_assembly,
                 lens_zoom,
-                1.0,
+                ATMOSPHERE_IOR,
                 POLY_DEGREE,
                 wavelength_bounds,
                 POLY_WAVELENGTH_BINS,
@@ -1106,7 +1130,7 @@ fn run_simulation(
                         let result = lens_assembly.trace_reverse(
                             lens_zoom,
                             Input::new(ray, lambda / 1000.0),
-                            1.04,
+                            ATMOSPHERE_IOR,
                             |e| {
                                 (
                                     local_simulation_state.aperture.is_rejected(
@@ -1167,7 +1191,7 @@ fn run_simulation(
                         let result = lens_assembly.trace_reverse(
                             lens_zoom,
                             Input::new(ray, lambda / 1000.0),
-                            1.04,
+                            ATMOSPHERE_IOR,
                             |e| {
                                 (
                                     local_simulation_state.aperture.is_rejected(
@@ -1274,22 +1298,29 @@ fn run_simulation(
 
                                 attempts += 1;
                                 // Either evaluate the polynomial lens model (poly mode)
-                                // or trace through the lens. The poly map has no aperture
-                                // test and no transmittance, so it reports tau = 1 and is
-                                // never vignetted — handy for seeing the model in
-                                // isolation. Falls back to tracing if poly is unsupported.
+                                // or trace through the lens. The poly map always honors
+                                // the aperture stop; with `poly_vignetting` it also
+                                // applies barrel housing vignetting + per-surface Fresnel
+                                // falloff (matching the trace), otherwise it is flat-
+                                // bright (tau = 1) and only stop-clipped. Falls back to
+                                // tracing if poly is unsupported.
                                 let result = match (
                                     local_simulation_state.use_poly,
                                     poly_lens.as_ref(),
                                 ) {
-                                    (true, Some(pl)) => Some(Output::new(
-                                        pl.map_forward::<Backend>(ray, lambda),
-                                        1.0,
-                                    )),
+                                    (true, Some(pl)) => pl
+                                        .map_forward_clipped::<Backend, _>(
+                                            ray,
+                                            lambda,
+                                            &local_simulation_state.aperture,
+                                            local_simulation_state.aperture_radius,
+                                            local_simulation_state.poly_vignetting,
+                                        )
+                                        .map(|(r, tau)| Output::new(r, tau)),
                                     _ => lens_assembly.trace_forward(
                                         lens_zoom,
                                         Input::new(ray, lambda / 1000.0),
-                                        1.04,
+                                        ATMOSPHERE_IOR,
                                         |e| {
                                             (
                                                 local_simulation_state.aperture.is_rejected(
@@ -1793,6 +1824,7 @@ fn main() {
         maybe_receiver: None,
         use_sampler: true,
         use_poly: false,
+        poly_vignetting: true,
         trace_direction: TraceDirection::FromFilm,
         focal_mode: FocalMode::FromFilm,
         recompute_focal: false,
